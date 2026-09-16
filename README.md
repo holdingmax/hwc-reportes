@@ -73,3 +73,18 @@ python -m src.main --airline gol --input "data/archivo original.xlsx" --output "
   cargo se le facturan. Hay una entrada de ejemplo comentada en
   `config.py` (`AIRLINE_CONFIGS`) lista para descomentar y ajustar una vez
   que el cliente lo confirme.
+
+## Nota sobre la promoción a producción (2026-09-16)
+
+Este proyecto se promovió al repo de producción (`holdingmax/hwc-reportes`)
+en el commit `3fd52bb` con 3 preguntas de tarifas todavía sin confirmar por
+el cliente:
+
+- Tarifas de estación para Avianca en ROS, MDZ y AEP.
+- Tarifas de estación para LATAM en COR, ROS, MDZ y NQN.
+- Criterio de hojas vacías en Avianca.
+
+Se le consultó al cliente 3 veces sobre estos puntos sin recibir respuesta.
+La app ya muestra avisos (banners) visibles para las estaciones sin
+confirmar, así que se decidió promover igual mientras se espera la
+confirmación, en lugar de bloquear el lanzamiento.

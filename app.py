@@ -83,8 +83,8 @@ st.markdown(
     --hwc-blue: #2D79AB;
     --hwc-blue-light: #3895D1;
     --hwc-blue-text: #2C5877;
-    --hwc-bg-1: #F4F8FB;
-    --hwc-bg-2: #E9F1F6;
+    --hwc-bg-1: #DDE7EE;
+    --hwc-bg-2: #C9D8E3;
     --hwc-card: #FFFFFF;
     --hwc-text: #1F2933;
     --hwc-text-muted: #64748B;

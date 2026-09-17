@@ -54,9 +54,18 @@ python -m src.main --airline gol --input "data/archivo original.xlsx" --output "
   vía). Hoy están confirmados:
   - Avianca: Delivery Fee + Transmisión Electrónica.
   - Gol: Delivery Fee + Collect.
-- **Estaciones**: se generan siempre hojas para EZE, COR, ROS, MDZ y AEP.
-  NQN queda afuera de la lista canónica porque en el archivo original solo
-  aparece con movimientos de LATAM.
+- **Estaciones**: por defecto se genera una hoja por cada combinación de
+  tipo de cargo y estación en EZE, COR, ROS, MDZ y AEP. NQN queda afuera de
+  la lista canónica porque en el archivo original solo aparece con
+  movimientos de LATAM.
+  - **Excepción confirmada para Avianca** (Cristian, 17/9/2026): Delivery
+    Fee solo se factura en EZE y COR, y Transmisión Electrónica solo en
+    EZE. No es una tarifa sin confirmar: esas combinaciones de
+    estación/tipo de cargo directamente no existen para Avianca, así que
+    no se genera hoja (ni vacía) para las estaciones que quedan afuera,
+    aunque el archivo original traiga filas ahí. Ver
+    `AVIANCA_DELIVERY_FEE_STATIONS` / `AVIANCA_TRANS_ELECTRONICA_STATIONS`
+    en `src/config.py`.
 - **Sin cálculos derivados**: en esta etapa las columnas de monto (`Dry.Fee`,
   `Trans.E.`, `Iata`, `Collect`) se copian tal cual vienen del original, sin
   ningún split ni conversión (por ejemplo, no se hace el split USD/ARS que
@@ -88,3 +97,14 @@ Se le consultó al cliente 3 veces sobre estos puntos sin recibir respuesta.
 La app ya muestra avisos (banners) visibles para las estaciones sin
 confirmar, así que se decidió promover igual mientras se espera la
 confirmación, en lugar de bloquear el lanzamiento.
+
+**Actualización (17/9/2026)**: Cristian confirmó que el punto de Avianca
+ROS/MDZ/AEP no era una tarifa pendiente de confirmar, sino una regla de
+negocio real: Avianca no factura Delivery Fee en ROS, MDZ ni AEP, ni
+Transmisión Electrónica fuera de EZE (ver "Excepción confirmada para
+Avianca" más arriba). Con eso resuelto, la única tarifa real pendiente de
+confirmación es la de LATAM en COR, ROS, MDZ y NQN — el cliente aprobó que
+mientras tanto se siga usando el comportamiento actual (dato bruto sin
+ajuste) como válido. El criterio de hojas vacías en Avianca sigue sin
+confirmar. Gol y LATAM (fuera de esa tarifa) quedaron confirmados OK tal
+como están.

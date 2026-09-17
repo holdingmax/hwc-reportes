@@ -77,8 +77,21 @@ FLOW_LIQUIDACION = "liquidacion"
 # es una red de seguridad para que la interfaz avise en vez de mostrar un
 # numero sin confirmar con total confianza. Facil de vaciar (lista vacia)
 # a medida que el cliente confirme cada estacion.
-AVIANCA_UNCONFIRMED_STATIONS = ["ROS", "MDZ", "AEP"]
 LATAM_UNCONFIRMED_STATIONS = ["COR", "ROS", "MDZ", "NQN"]
+
+# Estaciones donde Avianca factura cada tipo de cargo. Confirmado por
+# Cristian (cliente) el 17/9/2026: esto NO es una tarifa pendiente de
+# confirmar, es una regla de negocio real -- estas combinaciones de
+# estacion/tipo de cargo directamente no existen. Por eso no se genera
+# hoja (ni vacia con aviso de "sin movimiento") para las estaciones que
+# quedan afuera de cada lista; ver "charge_type_stations" mas abajo y
+# STATIONS en report_builder.py. Delivery Fee y Transmision Electronica
+# no son simetricos a proposito: Delivery Fee se factura en EZE y COR,
+# pero Transmision Electronica solo en EZE, aunque el archivo original
+# traiga filas de Trans.E. != 0 en otras estaciones (esas filas no se le
+# facturan a Avianca por esta via).
+AVIANCA_DELIVERY_FEE_STATIONS = ["EZE", "COR"]
+AVIANCA_TRANS_ELECTRONICA_STATIONS = ["EZE"]
 
 AIRLINE_CONFIGS = {
     "avianca": {
@@ -89,7 +102,14 @@ AIRLINE_CONFIGS = {
         # (hoja vacia sin texto). Hasta que lo confirmen, mantiene el texto
         # explicativo. Para cambiarlo: EMPTY_SHEET_STYLE_HEADERS_ONLY.
         "empty_sheet_style": EMPTY_SHEET_STYLE_PLACEHOLDER,
-        "unconfirmed_stations": AVIANCA_UNCONFIRMED_STATIONS,
+        # Restringe, por tipo de cargo, la lista global STATIONS a las
+        # estaciones donde ese cargo realmente se factura (ver comentario de
+        # AVIANCA_DELIVERY_FEE_STATIONS / AVIANCA_TRANS_ELECTRONICA_STATIONS
+        # arriba). Un tipo de cargo sin entrada aca usaria STATIONS entera.
+        "charge_type_stations": {
+            "delivery_fee": AVIANCA_DELIVERY_FEE_STATIONS,
+            "trans_electronica": AVIANCA_TRANS_ELECTRONICA_STATIONS,
+        },
     },
     "gol": {
         "match": "GOL",
@@ -115,16 +135,16 @@ EMPTY_STATION_TEXT = "Sin movimiento de awbs de importación destino {station}"
 # Delivery Fee de Avianca: regla de negocio fija, sin tabla de tarifas,
 # confirmada estacion por estacion (no es una unica regla para toda
 # Avianca). Confirmado por Cristian Nagel que EZE usa 200 USD fijo (margen
-# de Handyway). COR, ROS, MDZ, AEP: pendiente de confirmar si aplica la
-# misma regla u otra distinta -- por ahora se usa el dato bruto del
-# original, que coincide con la referencia conocida para COR.
+# de Handyway). COR: pendiente de confirmar si aplica la misma regla u
+# otra distinta -- por ahora se usa el dato bruto del original, que
+# coincide con la referencia conocida para COR. ROS, MDZ y AEP no
+# aparecen aca porque Avianca no factura Delivery Fee en esas estaciones
+# (ver AVIANCA_DELIVERY_FEE_STATIONS mas arriba): no hay hoja donde
+# aplicar ningun ajuste.
 # None = sin ajuste, se deja "Dry.Fee" tal cual viene del original.
 AVIANCA_DELIVERY_FEE_USD_POR_ESTACION = {
     "EZE": 200,
     "COR": None,
-    "ROS": None,
-    "MDZ": None,
-    "AEP": None,
 }
 
 # --- Liquidacion formal de LATAM (ver liquidacion_builder.py) ---

@@ -131,13 +131,16 @@ def build_airline_report(df: pd.DataFrame, airline_key: str, period: Period | No
 
     empty_sheet_style = airline_cfg.get("empty_sheet_style", EMPTY_SHEET_STYLE_PLACEHOLDER)
 
+    charge_type_stations = airline_cfg.get("charge_type_stations", {})
+
     sheets: dict[str, pd.DataFrame] = {}
     for charge_type_key in airline_cfg["charge_types"]:
         charge_cfg = CHARGE_TYPES[charge_type_key]
         delivery_fee_usd_by_station = None
         if airline_key == "avianca" and charge_type_key == "delivery_fee":
             delivery_fee_usd_by_station = AVIANCA_DELIVERY_FEE_USD_POR_ESTACION
-        charge_sheets = _build_charge_type_sheets(airline_df, charge_cfg, empty_sheet_style, delivery_fee_usd_by_station)
+        stations = charge_type_stations.get(charge_type_key, STATIONS)
+        charge_sheets = _build_charge_type_sheets(airline_df, charge_cfg, empty_sheet_style, stations, delivery_fee_usd_by_station)
         sheets.update(charge_sheets)
     return sheets
 
@@ -146,14 +149,24 @@ def _build_charge_type_sheets(
     airline_df: pd.DataFrame,
     charge_cfg: dict,
     empty_sheet_style: str,
+    stations: list[str],
     delivery_fee_usd_by_station: dict | None = None,
 ) -> dict[str, pd.DataFrame]:
+    """Arma las hojas de un tipo de cargo, una por estacion en `stations`.
+
+    `stations` es la lista de estaciones donde este tipo de cargo
+    efectivamente se factura para esta aerolinea (normalmente STATIONS
+    entera, o un subconjunto via "charge_type_stations" en
+    AIRLINE_CONFIGS -- ver ese comentario en config.py). Una estacion que
+    no esta en `stations` no genera ninguna hoja, ni siquiera vacia: la
+    combinacion estacion/tipo de cargo no existe para esta aerolinea.
+    """
     amount_columns = charge_cfg["amount_columns"]
     report_columns = charge_cfg["report_columns"]
 
     if charge_cfg["per_station"]:
         result = {}
-        for station in STATIONS:
+        for station in stations:
             station_df = airline_df[airline_df[COL_ESTACION] == station]
             mask = _nonzero_mask(station_df, amount_columns)
             filtered = station_df.loc[mask, report_columns].reset_index(drop=True)

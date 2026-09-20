@@ -16,6 +16,13 @@ tarifas y ajustes_manuales se crean por migracion (ver sql/migrations/) pero
 no se leen ni se escriben desde este modulo todavia: el calculo sigue
 usando AVIANCA_DELIVERY_FEE_USD_POR_ESTACION de config.py como hasta ahora,
 y "Compensacion" en LATAM sigue siendo el texto manual de siempre.
+
+Ademas de las funciones de guardado, este modulo expone dos funciones de
+SOLO LECTURA para la pantalla de Historial (obtener_filtros_historial /
+obtener_historial): nunca escriben nada, y siguen el mismo criterio
+fail-soft que el guardado -- si la base no responde, devuelven None en vez
+de lanzar excepcion, para que la pantalla muestre un mensaje en vez de
+romperse.
 """
 
 import hashlib
@@ -285,3 +292,66 @@ def guardar_liquidacion_latam(
             )
     except Exception:
         _get_connection.clear()
+
+
+def obtener_filtros_historial() -> dict | None:
+    """Aerolineas/estaciones/periodos distintos que aparecen en liquidaciones,
+    para poblar los selectores de la pantalla de Historial.
+
+    None si la base no esta configurada o no responde (ver docstring del
+    modulo) -- la pantalla lo interpreta como "historial no disponible
+    ahora", no como un error fatal.
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return None
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT aerolinea FROM liquidaciones ORDER BY aerolinea")
+            aerolineas = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT DISTINCT estacion FROM liquidaciones ORDER BY estacion")
+            estaciones = [row[0] for row in cur.fetchall()]
+            cur.execute(
+                "SELECT DISTINCT periodo, periodo_mes, periodo_anio FROM liquidaciones ORDER BY periodo DESC"
+            )
+            periodos = cur.fetchall()  # [(date(2026,7,1), 'JUL', '26'), ...]
+        return {"aerolineas": aerolineas, "estaciones": estaciones, "periodos": periodos}
+    except Exception:
+        _get_connection.clear()
+        return None
+
+
+def obtener_historial(
+    aerolinea: str | None = None,
+    periodo: date | None = None,
+    estacion: str | None = None,
+) -> pd.DataFrame | None:
+    """Liquidaciones filtradas (mas recientes primero). Solo lectura.
+
+    Cada fila es UN reporte generado (ver guardar_reporte_simple /
+    guardar_liquidacion_latam): si el mismo periodo/aerolinea se genero
+    mas de una vez, aparece mas de una vez aca -- es historial real, no un
+    resumen deduplicado. Un None en cualquier filtro significa "todos".
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return None
+        # Los ::text/::date son necesarios: sin el cast explicito, Postgres no
+        # puede inferir el tipo de un parametro que se usa dos veces (IS NULL
+        # y comparacion) y psycopg tira AmbiguousParameter -- probado en el
+        # navegador real, no es una precaucion teorica.
+        query = """
+            SELECT generado_en, aerolinea, estacion, tipo_cargo, periodo_mes,
+                   periodo_anio, cantidad_filas, monto_total
+            FROM liquidaciones
+            WHERE (%(aerolinea)s::text IS NULL OR aerolinea = %(aerolinea)s::text)
+              AND (%(periodo)s::date IS NULL OR periodo = %(periodo)s::date)
+              AND (%(estacion)s::text IS NULL OR estacion = %(estacion)s::text)
+            ORDER BY generado_en DESC
+        """
+        params = {"aerolinea": aerolinea, "periodo": periodo, "estacion": estacion}
+        return pd.read_sql(query, conn, params=params)
+    except Exception:
+        _get_connection.clear()
+        return None

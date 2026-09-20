@@ -11,6 +11,12 @@ ver ese modulo para el detalle. Es un efecto secundario que nunca bloquea ni
 cambia el Excel: si DATABASE_URL no esta configurada o la base falla, esas
 funciones no hacen nada y el flujo de descarga sigue exactamente igual.
 
+La pestaña "Historial" (mas abajo) es de SOLO LECTURA contra liquidaciones,
+via obtener_filtros_historial/obtener_historial en src/db.py -- no cambia ni
+depende del flujo de generacion, es una vista aparte sobre lo ya persistido.
+Mismo criterio fail-soft: si la base no responde, muestra un mensaje en vez
+de romper la pantalla.
+
 El estilo (paleta de azules extraida del logo, cards, tipografia, marca de
 agua) se inyecta como CSS via st.markdown(unsafe_allow_html=True), ya que
 Streamlit no permite theming tan especifico de forma nativa. Los selectores
@@ -26,10 +32,16 @@ import base64
 import io
 import os
 
+import pandas as pd
 import streamlit as st
 
 from src.config import AIRLINE_CONFIGS, CHARGE_TYPES, COL_COD_VUELO, FLOW_LIQUIDACION
-from src.db import guardar_liquidacion_latam, guardar_reporte_simple
+from src.db import (
+    guardar_liquidacion_latam,
+    guardar_reporte_simple,
+    obtener_filtros_historial,
+    obtener_historial,
+)
 from src.liquidacion_builder import (
     build_latam_detalle,
     build_latam_resumen,
@@ -50,6 +62,7 @@ CHARGE_TYPE_LABELS = {
     "delivery_fee": ("📦", "Delivery Fee"),
     "trans_electronica": ("📡", "Transmisión Electrónica"),
     "collect": ("💰", "Collect"),
+    "latam_liquidacion": ("🧾", "Liquidación LATAM"),
 }
 
 LOGO_PATH = os.path.join("static", "images", "handyway-logo.png")
@@ -189,11 +202,12 @@ h1, h2, h3 {{ font-family: 'Inter', sans-serif; font-weight: 800; color: var(--h
     text-transform: uppercase; padding: 0.28rem 0.75rem; border-radius: 100px; position: relative;
 }}
 
-/* --- Cards de seccion (subir archivo / aerolinea / resultado / login) --- */
+/* --- Cards de seccion (subir archivo / aerolinea / resultado / login / historial) --- */
 .st-key-card_upload[data-testid="stVerticalBlock"],
 .st-key-card_config[data-testid="stVerticalBlock"],
 .st-key-card_result[data-testid="stVerticalBlock"],
-.st-key-card_login[data-testid="stVerticalBlock"] {{
+.st-key-card_login[data-testid="stVerticalBlock"],
+.st-key-card_historial[data-testid="stVerticalBlock"] {{
     background: var(--hwc-card);
     border: 1px solid var(--hwc-border);
     border-radius: 16px;
@@ -305,6 +319,25 @@ div[data-baseweb="select"] > div {{ border-radius: 8px !important; }}
     text-align: center;
 }}
 
+/* --- Tabs (Generar reporte / Historial). Selectores verificados contra el
+   DOM real: el highlight/subrayado activo es un div[data-baseweb="tab-highlight"]
+   hermano de los botones, no un pseudo-elemento de cada boton. --- */
+[data-testid="stTabs"] [role="tablist"] {{
+    border-bottom: 1px solid var(--hwc-border);
+    gap: 0.5rem;
+}}
+[data-testid="stTabs"] button[data-testid="stTab"] {{
+    color: var(--hwc-text-muted) !important;
+    font-weight: 600 !important;
+}}
+[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {{
+    color: var(--hwc-blue-text) !important;
+}}
+[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
+    background-color: var(--hwc-blue) !important;
+    height: 2.5px !important;
+}}
+
 /* --- Footer --- */
 .hwc-footer {{
     text-align: center; color: var(--hwc-text-muted); font-size: 0.78rem;
@@ -320,7 +353,8 @@ div[data-baseweb="select"] > div {{ border-radius: 8px !important; }}
     .st-key-card_upload[data-testid="stVerticalBlock"],
     .st-key-card_config[data-testid="stVerticalBlock"],
     .st-key-card_result[data-testid="stVerticalBlock"],
-    .st-key-card_login[data-testid="stVerticalBlock"] {{ padding: 1.2rem 1.15rem; }}
+    .st-key-card_login[data-testid="stVerticalBlock"],
+    .st-key-card_historial[data-testid="stVerticalBlock"] {{ padding: 1.2rem 1.15rem; }}
     .hwc-watermark {{ background-size: 320px; background-position: bottom -30px right -30px; }}
 }}
 </style>
@@ -394,19 +428,28 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Seccion 1: subir archivo
+# Tabs: separan el flujo de generar reportes (de siempre) del Historial de
+# solo lectura (nuevo). No comparten estado mas que las variables de Python
+# ya usadas en el flujo de siempre -- el tab de Historial no lee ni escribe
+# nada de lo que pasa en el de Generar.
 # ---------------------------------------------------------------------------
-with st.container(border=True, key="card_upload"):
-    st.markdown('<div class="hwc-step"><span class="hwc-step-num">1</span>📄 Subí el archivo</div>', unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("Archivo original (export del sistema)", type="xlsx", label_visibility="collapsed")
+tab_generar, tab_historial = st.tabs(["📄 Generar reporte", "🕘 Historial"])
 
 # ---------------------------------------------------------------------------
-# Seccion 2: elegir aerolinea + generar
+# Seccion 1: subir archivo
 # ---------------------------------------------------------------------------
-with st.container(border=True, key="card_config"):
-    st.markdown('<div class="hwc-step"><span class="hwc-step-num">2</span>✈️ Elegí la aerolínea</div>', unsafe_allow_html=True)
-    airline_key = st.selectbox("Aerolínea", options=sorted(AIRLINE_CONFIGS), format_func=str.upper, label_visibility="collapsed")
-    generate = st.button("Generar reporte", disabled=uploaded_file is None, type="primary")
+with tab_generar:
+    with st.container(border=True, key="card_upload"):
+        st.markdown('<div class="hwc-step"><span class="hwc-step-num">1</span>📄 Subí el archivo</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Archivo original (export del sistema)", type="xlsx", label_visibility="collapsed")
+
+    # -----------------------------------------------------------------------
+    # Seccion 2: elegir aerolinea + generar
+    # -----------------------------------------------------------------------
+    with st.container(border=True, key="card_config"):
+        st.markdown('<div class="hwc-step"><span class="hwc-step-num">2</span>✈️ Elegí la aerolínea</div>', unsafe_allow_html=True)
+        airline_key = st.selectbox("Aerolínea", options=sorted(AIRLINE_CONFIGS), format_func=str.upper, label_visibility="collapsed")
+        generate = st.button("Generar reporte", disabled=uploaded_file is None, type="primary")
 
 
 def _sheets_for_charge_type(sheets: dict, charge_type_key: str) -> dict:
@@ -515,90 +558,173 @@ def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, 
 # ---------------------------------------------------------------------------
 # Seccion 3: resultado
 # ---------------------------------------------------------------------------
-if generate:
-    with st.container(border=True, key="card_result"):
-        st.markdown('<div class="hwc-step"><span class="hwc-step-num">3</span>📊 Resultado</div>', unsafe_allow_html=True)
+with tab_generar:
+    if generate:
+        with st.container(border=True, key="card_result"):
+            st.markdown('<div class="hwc-step"><span class="hwc-step-num">3</span>📊 Resultado</div>', unsafe_allow_html=True)
 
-        airline_cfg = AIRLINE_CONFIGS[airline_key]
+            airline_cfg = AIRLINE_CONFIGS[airline_key]
 
-        if airline_cfg.get("flow") == FLOW_LIQUIDACION:
-            buffer, _, period = _render_liquidacion_result(uploaded_file)
-        else:
-            with st.spinner("Generando reporte..."):
-                df = load_original(uploaded_file)
-                period, excluded = detect_period_exclusions(df, airline_key)
-                sheets = build_airline_report(df, airline_key, period=period)
+            if airline_cfg.get("flow") == FLOW_LIQUIDACION:
+                buffer, _, period = _render_liquidacion_result(uploaded_file)
+            else:
+                with st.spinner("Generando reporte..."):
+                    df = load_original(uploaded_file)
+                    period, excluded = detect_period_exclusions(df, airline_key)
+                    sheets = build_airline_report(df, airline_key, period=period)
 
-                buffer = io.BytesIO()
-                write_report(sheets, buffer)
-                buffer.seek(0)
+                    buffer = io.BytesIO()
+                    write_report(sheets, buffer)
+                    buffer.seek(0)
 
-                guardar_reporte_simple(
-                    nombre_archivo=uploaded_file.name,
-                    file_bytes=uploaded_file.getvalue(),
-                    df=df,
-                    airline_key=airline_key,
-                    period=period,
-                    sheets=sheets,
-                )
+                    guardar_reporte_simple(
+                        nombre_archivo=uploaded_file.name,
+                        file_bytes=uploaded_file.getvalue(),
+                        df=df,
+                        airline_key=airline_key,
+                        period=period,
+                        sheets=sheets,
+                    )
 
-            st.success("Reporte generado correctamente.", icon="✅")
-            st.caption(f"Período detectado: {period_label(period)}")
+                st.success("Reporte generado correctamente.", icon="✅")
+                st.caption(f"Período detectado: {period_label(period)}")
 
-            if not excluded.empty:
-                breakdown = excluded[COL_COD_VUELO].map(extract_period).value_counts()
-                detalle_txt = ", ".join(f"{n} de {period_label(p)}" for p, n in breakdown.items())
-                fila_word = "fila" if len(excluded) == 1 else "filas"
-                st.warning(
-                    f"Se excluyeron {len(excluded)} {fila_word} fuera del período detectado "
-                    f"({period_label(period)}) del reporte de {airline_key.upper()}: {detalle_txt}.",
-                    icon="⚠️",
-                )
-
-            unconfirmed_stations = airline_cfg.get("unconfirmed_stations", [])
-            if unconfirmed_stations:
-                activity = detect_unconfirmed_activity(sheets, unconfirmed_stations)
-                if activity:
-                    estaciones = ", ".join(activity)
+                if not excluded.empty:
+                    breakdown = excluded[COL_COD_VUELO].map(extract_period).value_counts()
+                    detalle_txt = ", ".join(f"{n} de {period_label(p)}" for p, n in breakdown.items())
+                    fila_word = "fila" if len(excluded) == 1 else "filas"
                     st.warning(
-                        f"Se detectaron movimientos en {estaciones} para {airline_key.upper()}. "
-                        f"La tarifa aplicada ahí todavía no está confirmada con el cliente — "
-                        f"revisá los montos manualmente antes de usarlos.",
+                        f"Se excluyeron {len(excluded)} {fila_word} fuera del período detectado "
+                        f"({period_label(period)}) del reporte de {airline_key.upper()}: {detalle_txt}.",
                         icon="⚠️",
                     )
 
-            for charge_type_key in airline_cfg["charge_types"]:
-                icon, label = CHARGE_TYPE_LABELS.get(charge_type_key, ("📁", charge_type_key))
-                group_sheets = _sheets_for_charge_type(sheets, charge_type_key)
+                unconfirmed_stations = airline_cfg.get("unconfirmed_stations", [])
+                if unconfirmed_stations:
+                    activity = detect_unconfirmed_activity(sheets, unconfirmed_stations)
+                    if activity:
+                        estaciones = ", ".join(activity)
+                        st.warning(
+                            f"Se detectaron movimientos en {estaciones} para {airline_key.upper()}. "
+                            f"La tarifa aplicada ahí todavía no está confirmada con el cliente — "
+                            f"revisá los montos manualmente antes de usarlos.",
+                            icon="⚠️",
+                        )
 
-                rows_html = ""
-                for sheet_name, sheet_df in group_sheets.items():
-                    n_rows = len(sheet_df)
-                    if n_rows == 0:
-                        rows_html += (
-                            f'<div class="hwc-row hwc-row-empty">'
-                            f'<span class="hwc-dot hwc-dot-empty">–</span>{sheet_name} · sin movimiento</div>'
-                        )
-                    else:
-                        rows_html += (
-                            f'<div class="hwc-row hwc-row-active">'
-                            f'<span class="hwc-dot hwc-dot-active">✓</span>{sheet_name}'
-                            f'<span class="hwc-count">{n_rows} filas</span></div>'
-                        )
+                for charge_type_key in airline_cfg["charge_types"]:
+                    icon, label = CHARGE_TYPE_LABELS.get(charge_type_key, ("📁", charge_type_key))
+                    group_sheets = _sheets_for_charge_type(sheets, charge_type_key)
+
+                    rows_html = ""
+                    for sheet_name, sheet_df in group_sheets.items():
+                        n_rows = len(sheet_df)
+                        if n_rows == 0:
+                            rows_html += (
+                                f'<div class="hwc-row hwc-row-empty">'
+                                f'<span class="hwc-dot hwc-dot-empty">–</span>{sheet_name} · sin movimiento</div>'
+                            )
+                        else:
+                            rows_html += (
+                                f'<div class="hwc-row hwc-row-active">'
+                                f'<span class="hwc-dot hwc-dot-active">✓</span>{sheet_name}'
+                                f'<span class="hwc-count">{n_rows} filas</span></div>'
+                            )
+
+                    st.markdown(
+                        f'<div class="hwc-group-card">'
+                        f'<div class="hwc-group-title">{icon} {label}</div>'
+                        f'{rows_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.download_button(
+                label="⬇️ Descargar reporte",
+                data=buffer,
+                file_name=f"{airline_key}_{period_slug(period)}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+            )
+
+# ---------------------------------------------------------------------------
+# Historial: vista de SOLO LECTURA sobre liquidaciones ya persistidas (ver
+# obtener_filtros_historial/obtener_historial en src/db.py). No recalcula
+# nada -- muestra tal cual lo que guardo cada "Generar reporte" pasado.
+# ---------------------------------------------------------------------------
+with tab_historial:
+    with st.container(border=True, key="card_historial"):
+        st.markdown('<div class="hwc-step">🕘 Historial de liquidaciones</div>', unsafe_allow_html=True)
+        st.caption("Consulta de solo lectura sobre lo ya generado y guardado — no vuelve a calcular nada.")
+
+        filtros = obtener_filtros_historial()
+
+        if filtros is None:
+            st.info(
+                "El historial no está disponible en este momento (sin conexión a la base de datos). "
+                "Podés seguir generando y descargando reportes con normalidad en la otra pestaña.",
+                icon="🗄️",
+            )
+        elif not filtros["aerolineas"]:
+            st.info("Todavía no hay ningún reporte generado guardado en el historial.", icon="🗄️")
+        else:
+            col_aerolinea, col_periodo, col_estacion = st.columns(3)
+            with col_aerolinea:
+                aerolinea_opciones = ["Todas"] + [a.upper() for a in filtros["aerolineas"]]
+                aerolinea_sel = st.selectbox("Aerolínea", aerolinea_opciones, key="hist_aerolinea")
+            with col_periodo:
+                periodo_opciones = {"Todos": None}
+                for periodo_fecha, mes, anio in filtros["periodos"]:
+                    periodo_opciones[period_label((mes, anio))] = periodo_fecha
+                periodo_sel_label = st.selectbox("Período", list(periodo_opciones.keys()), key="hist_periodo")
+            with col_estacion:
+                estacion_opciones = ["Todas"] + filtros["estaciones"]
+                estacion_sel = st.selectbox("Estación", estacion_opciones, key="hist_estacion")
+
+            aerolinea_filtro = None if aerolinea_sel == "Todas" else aerolinea_sel.lower()
+            periodo_filtro = periodo_opciones[periodo_sel_label]
+            estacion_filtro = None if estacion_sel == "Todas" else estacion_sel
+
+            historial_df = obtener_historial(aerolinea_filtro, periodo_filtro, estacion_filtro)
+
+            if historial_df is None:
+                st.warning("No se pudo consultar el historial ahora mismo. Probá de nuevo en unos minutos.", icon="⚠️")
+            elif historial_df.empty:
+                st.info("No hay liquidaciones para los filtros seleccionados.", icon="🔍")
+            else:
+                total = float(historial_df["monto_total"].fillna(0).sum())
+                cantidad = len(historial_df)
+                combinaciones_unicas = historial_df[
+                    ["aerolinea", "estacion", "tipo_cargo", "periodo_mes", "periodo_anio"]
+                ].drop_duplicates().shape[0]
 
                 st.markdown(
                     f'<div class="hwc-group-card">'
-                    f'<div class="hwc-group-title">{icon} {label}</div>'
-                    f'{rows_html}</div>',
+                    f'<div class="hwc-group-title">Σ Total filtrado</div>'
+                    f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                    f'{cantidad} liquidaci{"ón" if cantidad == 1 else "ones"}'
+                    f'<span class="hwc-count">{_money(total)}</span></div>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
+                if cantidad > combinaciones_unicas:
+                    st.caption(
+                        "⚠️ Hay más de una generación guardada para la misma combinación "
+                        "aerolínea/estación/período — el total suma todas, no solo la última."
+                    )
 
-        st.download_button(
-            label="⬇️ Descargar reporte",
-            data=buffer,
-            file_name=f"{airline_key}_{period_slug(period)}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-        )
+                tabla = pd.DataFrame({
+                    "Fecha de generación": historial_df["generado_en"].dt.strftime("%d/%m/%Y %H:%M") + " UTC",
+                    "Aerolínea": historial_df["aerolinea"].str.upper(),
+                    "Estación": historial_df["estacion"],
+                    "Tipo de cargo": historial_df["tipo_cargo"].map(
+                        lambda t: CHARGE_TYPE_LABELS.get(t, ("", t))[1]
+                    ),
+                    "Período": [
+                        period_label((mes, anio))
+                        for mes, anio in zip(historial_df["periodo_mes"], historial_df["periodo_anio"])
+                    ],
+                    "Movimientos": historial_df["cantidad_filas"],
+                    "Monto total": historial_df["monto_total"].fillna(0).map(_money),
+                })
+                st.dataframe(tabla, use_container_width=True, hide_index=True)
 
 st.markdown('<div class="hwc-footer">Handyway Cargo · Automatización de reportes</div>', unsafe_allow_html=True)

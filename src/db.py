@@ -1,0 +1,287 @@
+"""Persistencia en Postgres de cargas, movimientos y liquidaciones (etapa 1).
+
+Capa aditiva pura: no cambia ni depende de ningun calculo de negocio. No
+importa nada de loader.py/report_builder.py/liquidacion_builder.py/
+period_utils.py mas alla de leer AIRLINE_CONFIGS/CHARGE_TYPES/COL_* de
+config.py (que son datos de configuracion, no calculo) para no duplicar
+el mapeo de nombre-de-hoja -> tipo de cargo/estacion.
+
+Las dos funciones publicas (guardar_reporte_simple, guardar_liquidacion_latam)
+NUNCA lanzan excepciones: si DATABASE_URL no esta configurada, o la base no
+responde, no hacen nada. La app tiene que poder seguir generando y
+descargando el Excel exactamente igual aunque la base este caida -- la
+persistencia es un efecto secundario, no un requisito del flujo de Cristian.
+
+tarifas y ajustes_manuales se crean por migracion (ver sql/migrations/) pero
+no se leen ni se escriben desde este modulo todavia: el calculo sigue
+usando AVIANCA_DELIVERY_FEE_USD_POR_ESTACION de config.py como hasta ahora,
+y "Compensacion" en LATAM sigue siendo el texto manual de siempre.
+"""
+
+import hashlib
+import os
+from datetime import date
+
+import pandas as pd
+import psycopg
+import streamlit as st
+from dotenv import load_dotenv
+from psycopg.types.json import Json
+
+from src.config import (
+    AIRLINE_CONFIGS,
+    CHARGE_TYPES,
+    COL_ADUANA,
+    COL_AEROLINEA,
+    COL_CLIENTE,
+    COL_CODIGO,
+    COL_COD_VUELO,
+    COL_COLLECT,
+    COL_CONDICION,
+    COL_DRY_FEE,
+    COL_ESTACION,
+    COL_IATA,
+    COL_TIPO,
+    COL_TPO_CAMBIO,
+    COL_TRANS_E,
+    LATAM_LIQUIDACION_STATION,
+)
+from src.period_utils import Period, detect_period, excluded_by_period
+
+load_dotenv()
+
+_MESES = {
+    "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AGO": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12,
+}
+
+_MOVIMIENTO_COLUMNS = [
+    COL_CODIGO, COL_COD_VUELO, COL_CLIENTE, COL_CONDICION, COL_TIPO,
+    COL_TPO_CAMBIO, COL_DRY_FEE, COL_ADUANA, COL_TRANS_E, COL_IATA,
+    COL_COLLECT, COL_AEROLINEA, COL_ESTACION,
+]
+
+
+def _period_to_date(period: Period) -> date:
+    mes, anio = period
+    return date(2000 + int(anio), _MESES[mes], 1)
+
+
+def _texto_o_none(value) -> str | None:
+    return None if pd.isna(value) else str(value)
+
+
+def _numero_o_none(value) -> float | None:
+    return None if pd.isna(value) else float(value)
+
+
+def _codigo_texto(value) -> str | None:
+    """Igual criterio que _format_codigo en report_builder.py, copiado (no
+    importado) para no acoplar este modulo a un simbolo privado de otro."""
+    if pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _jsonable(value):
+    """Convierte numpy scalars (numpy.float64, etc.) a tipos nativos de
+    Python antes de serializar a JSONB -- json.dumps no sabe con numpy."""
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+@st.cache_resource
+def _get_connection() -> psycopg.Connection | None:
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return None
+    # connect_timeout corto: si la base esta inalcanzable (URL mal, firewall,
+    # caida de red), esto tiene que fallar rapido, no colgar la app entera
+    # esperando el timeout de TCP del sistema operativo (que puede ser de
+    # varios minutos).
+    return psycopg.connect(database_url, connect_timeout=5)
+
+
+def _guardar_carga(conn: psycopg.Connection, nombre_archivo: str, file_bytes: bytes, df: pd.DataFrame) -> int:
+    """Inserta cargas_archivo + movimientos_awb, o reusa la carga existente
+    si este mismo archivo (por contenido) ya se habia subido antes."""
+    archivo_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM cargas_archivo WHERE archivo_hash = %s", (archivo_hash,))
+        existente = cur.fetchone()
+        if existente:
+            return existente[0]
+
+        period = detect_period(df)
+        excluded = excluded_by_period(df, period)
+        periodo_mes, periodo_anio = period
+
+        cur.execute(
+            """
+            INSERT INTO cargas_archivo
+                (nombre_archivo, archivo_hash, periodo_mes, periodo_anio, periodo,
+                 filas_totales, filas_excluidas_periodo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (nombre_archivo, archivo_hash, periodo_mes, periodo_anio,
+             _period_to_date(period), len(df), len(excluded)),
+        )
+        carga_id = cur.fetchone()[0]
+        _guardar_movimientos(cur, carga_id, df)
+        return carga_id
+
+
+def _guardar_movimientos(cur: psycopg.Cursor, carga_id: int, df: pd.DataFrame) -> None:
+    registros = []
+    for _, fila in df[_MOVIMIENTO_COLUMNS].iterrows():
+        registros.append((
+            carga_id,
+            _codigo_texto(fila[COL_CODIGO]),
+            _texto_o_none(fila[COL_COD_VUELO]),
+            _texto_o_none(fila[COL_CLIENTE]),
+            _texto_o_none(fila[COL_CONDICION]),
+            _texto_o_none(fila[COL_TIPO]),
+            _numero_o_none(fila[COL_TPO_CAMBIO]),
+            _numero_o_none(fila[COL_DRY_FEE]),
+            _numero_o_none(fila[COL_ADUANA]),
+            _numero_o_none(fila[COL_TRANS_E]),
+            _numero_o_none(fila[COL_IATA]),
+            _numero_o_none(fila[COL_COLLECT]),
+            _texto_o_none(fila[COL_AEROLINEA]),
+            _texto_o_none(fila[COL_ESTACION]),
+        ))
+    if not registros:
+        return
+    cur.executemany(
+        """
+        INSERT INTO movimientos_awb
+            (carga_id, codigo, cod_vuelo, cliente, condicion, tipo, tpo_cambio,
+             dry_fee, aduana, trans_e, iata, collect, aerolinea, estacion)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """,
+        registros,
+    )
+
+
+def _guardar_liquidacion(
+    conn: psycopg.Connection,
+    carga_id: int,
+    aerolinea: str,
+    estacion: str,
+    tipo_cargo: str,
+    period: Period,
+    cantidad_filas: int,
+    monto_total: float | None,
+    detalle_totales: dict | None = None,
+) -> None:
+    periodo_mes, periodo_anio = period
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO liquidaciones
+                (carga_id, aerolinea, estacion, tipo_cargo, periodo_mes, periodo_anio,
+                 periodo, cantidad_filas, monto_total, detalle_totales)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                carga_id, aerolinea, estacion, tipo_cargo, periodo_mes, periodo_anio,
+                _period_to_date(period), cantidad_filas, monto_total,
+                Json(_jsonable(detalle_totales)) if detalle_totales is not None else None,
+            ),
+        )
+
+
+def _parse_sheet_name(sheet_name: str, airline_key: str) -> tuple[str, str]:
+    """(tipo_cargo, estacion) a partir de un nombre de hoja generado.
+
+    Reusa CHARGE_TYPES/AIRLINE_CONFIGS (config.py) en vez de duplicar el
+    mapeo sheet -> tipo de cargo: si cambia un sheet_prefix alla, esto
+    sigue funcionando sin tocar nada aca.
+    """
+    airline_cfg = AIRLINE_CONFIGS[airline_key]
+    for charge_type_key in airline_cfg["charge_types"]:
+        charge_cfg = CHARGE_TYPES[charge_type_key]
+        if charge_cfg.get("per_station"):
+            prefix = charge_cfg["sheet_prefix"] + " "
+            if sheet_name.startswith(prefix):
+                return charge_type_key, sheet_name[len(prefix):]
+        elif sheet_name == charge_cfg.get("sheet_name"):
+            return charge_type_key, "AR"  # hoja agrupada nacional (ej. "Collect AR")
+    return "desconocido", "desconocido"  # salvaguarda, no deberia ocurrir
+
+
+def _sumar_montos(sheet_df: pd.DataFrame, amount_columns: list[str]) -> float:
+    total = 0.0
+    for col in amount_columns:
+        if col in sheet_df.columns:
+            total += float(pd.to_numeric(sheet_df[col], errors="coerce").fillna(0).sum())
+    return total
+
+
+def guardar_reporte_simple(
+    nombre_archivo: str,
+    file_bytes: bytes,
+    df: pd.DataFrame,
+    airline_key: str,
+    period: Period,
+    sheets: dict[str, pd.DataFrame],
+) -> None:
+    """Persiste la carga completa (todas las aerolineas del archivo) mas una
+    fila en liquidaciones por cada hoja generada para airline_key.
+
+    No lanza excepciones (ver docstring del modulo): un fallo de base nunca
+    debe poder bloquear la descarga del Excel que ya se genero.
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return
+        with conn.transaction():
+            carga_id = _guardar_carga(conn, nombre_archivo, file_bytes, df)
+            for sheet_name, sheet_df in sheets.items():
+                tipo_cargo, estacion = _parse_sheet_name(sheet_name, airline_key)
+                amount_columns = CHARGE_TYPES.get(tipo_cargo, {}).get("amount_columns", [])
+                monto_total = _sumar_montos(sheet_df, amount_columns)
+                _guardar_liquidacion(
+                    conn, carga_id, airline_key, estacion, tipo_cargo,
+                    period, len(sheet_df), monto_total,
+                )
+    except Exception:
+        _get_connection.clear()  # conexion posiblemente rota / conexion nunca se establecio: reintentar la proxima vez
+
+
+def guardar_liquidacion_latam(
+    nombre_archivo: str,
+    file_bytes: bytes,
+    df: pd.DataFrame,
+    period: Period,
+    detalle: pd.DataFrame,
+    resumen: dict,
+) -> None:
+    """Persiste la carga completa mas una liquidacion 'latam_liquidacion'
+    con el desglose de resumen (total_la/neto_gravado/iva/total_4m/
+    total_periodo/sums) en detalle_totales.
+
+    No lanza excepciones, igual que guardar_reporte_simple.
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return
+        with conn.transaction():
+            carga_id = _guardar_carga(conn, nombre_archivo, file_bytes, df)
+            _guardar_liquidacion(
+                conn, carga_id, "latam", LATAM_LIQUIDACION_STATION, "latam_liquidacion",
+                period, len(detalle), resumen.get("total_periodo"), resumen,
+            )
+    except Exception:
+        _get_connection.clear()

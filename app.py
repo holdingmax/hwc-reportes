@@ -5,6 +5,12 @@ src/ (loader.py, report_builder.py, config.py) y no se modifica aca. Lo unico
 que se reusa de mas es AIRLINE_CONFIGS/CHARGE_TYPES para poder agrupar el
 resultado por tipo de cargo al mostrarlo, sin reimplementar el filtrado.
 
+Ademas de generar el Excel como siempre, cada reporte generado se persiste en
+Postgres via src/db.py (guardar_reporte_simple / guardar_liquidacion_latam) --
+ver ese modulo para el detalle. Es un efecto secundario que nunca bloquea ni
+cambia el Excel: si DATABASE_URL no esta configurada o la base falla, esas
+funciones no hacen nada y el flujo de descarga sigue exactamente igual.
+
 El estilo (paleta de azules extraida del logo, cards, tipografia, marca de
 agua) se inyecta como CSS via st.markdown(unsafe_allow_html=True), ya que
 Streamlit no permite theming tan especifico de forma nativa. Los selectores
@@ -23,6 +29,7 @@ import os
 import streamlit as st
 
 from src.config import AIRLINE_CONFIGS, CHARGE_TYPES, COL_COD_VUELO, FLOW_LIQUIDACION
+from src.db import guardar_liquidacion_latam, guardar_reporte_simple
 from src.liquidacion_builder import (
     build_latam_detalle,
     build_latam_resumen,
@@ -437,6 +444,15 @@ def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, 
         write_liquidacion(detalle, resumen, buffer)
         buffer.seek(0)
 
+        guardar_liquidacion_latam(
+            nombre_archivo=uploaded_file.name,
+            file_bytes=uploaded_file.getvalue(),
+            df=df,
+            period=period,
+            detalle=detalle,
+            resumen=resumen,
+        )
+
     st.success("Liquidación generada correctamente.", icon="✅")
     st.caption(f"Período detectado: {period_label(period)}")
 
@@ -516,6 +532,15 @@ if generate:
                 buffer = io.BytesIO()
                 write_report(sheets, buffer)
                 buffer.seek(0)
+
+                guardar_reporte_simple(
+                    nombre_archivo=uploaded_file.name,
+                    file_bytes=uploaded_file.getvalue(),
+                    df=df,
+                    airline_key=airline_key,
+                    period=period,
+                    sheets=sheets,
+                )
 
             st.success("Reporte generado correctamente.", icon="✅")
             st.caption(f"Período detectado: {period_label(period)}")

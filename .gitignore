@@ -11,6 +11,7 @@ __pycache__/
 # Credenciales / configuracion sensible
 .env
 .env.*
+!.env.example
 secrets.toml
 .streamlit/secrets.toml
 credentials.json

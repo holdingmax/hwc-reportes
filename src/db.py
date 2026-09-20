@@ -426,17 +426,18 @@ def obtener_movimientos_de_carga(carga_id: int) -> pd.DataFrame | None:
             WHERE carga_id = %(carga_id)s
         """
         movimientos = pd.read_sql(query, conn, params={"carga_id": carga_id})
-        # Los montos (a diferencia de Tpo.Cambio, que es un tipo de cambio
-        # con decimales de verdad) son siempre pesos enteros en el archivo
-        # original -- ver por ejemplo _apply_delivery_fee_override en
-        # report_builder.py, que tambien los deja en int64. NUMERIC en
-        # Postgres vuelve como float64 (ej. 264250.0); castear a Int64
-        # (nullable) evita un ".0" que no aparece en el Excel real.
-        for col in (COL_DRY_FEE, COL_ADUANA, COL_TRANS_E, COL_IATA, COL_COLLECT):
-            # .round() antes del cast: NUMERIC->float64 puede traer un
-            # residuo de punto flotante (ej. 264249.999999998) que
-            # astype("Int64") directo rechaza por no ser un cast seguro.
-            movimientos[col] = movimientos[col].round().astype("Int64")
+        # OJO: NO redondear ni castear las columnas de monto a entero aca.
+        # Hubo una version anterior que lo hacia asumiendo que siempre son
+        # pesos enteros -- FALSO: el archivo real tiene valores con
+        # centavos reales incluso en Dry.Fee (ej. 319742.5), y sobre todo
+        # en Iata/Collect (usadas por el IVA de LATAM, ej. 851451.42).
+        # Redondear ahi corrompia el calculo de build_latam_resumen()
+        # (total_periodo terminaba unos pesos distinto del Excel real) --
+        # detectado comparando este reconstruido contra el Excel real
+        # generado en el momento, antes de dar el fix por bueno. Si en
+        # algun momento se quiere mostrar sin ".0" en pantalla, ese
+        # formateo tiene que vivir en la capa de presentacion (app.py),
+        # nunca aca, para no tocar los valores que alimentan un calculo.
         return movimientos
     except Exception:
         _get_connection.clear()

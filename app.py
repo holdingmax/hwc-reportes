@@ -35,7 +35,14 @@ import os
 import pandas as pd
 import streamlit as st
 
-from src.config import AIRLINE_CONFIGS, CHARGE_TYPES, COL_COD_VUELO, FLOW_LIQUIDACION
+from src.config import (
+    AIRLINE_CONFIGS,
+    CHARGE_TYPES,
+    COL_COD_VUELO,
+    FLOW_LIQUIDACION,
+    LATAM_SUBFACTURA_4M,
+    LATAM_SUBFACTURA_LA,
+)
 from src.db import (
     guardar_liquidacion_latam,
     guardar_reporte_simple,
@@ -472,17 +479,25 @@ def _money(value: float) -> str:
     return f"$ {value:,.2f}"
 
 
-def _obtener_detalle_liquidacion(fila) -> pd.DataFrame | None:
-    """Detalle linea por linea de una liquidacion del Historial.
+def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | None:
+    """Detalle linea por linea de una liquidacion del Historial, mas el
+    Resumen Facturacion (con desglose de IVA) cuando aplica a LATAM.
 
     Se calcula con la MISMA logica que arma el Excel real
-    (build_airline_report / build_latam_detalle) aplicada sobre los
-    movimientos ya guardados de esa carga -- no reimplementa ningun
-    filtro de estacion/aerolinea/periodo, solo reusa esas funciones para
-    que el detalle mostrado en pantalla coincida exactamente con lo que
-    trae el Excel de esa combinacion.
+    (build_airline_report / build_latam_detalle + build_latam_resumen)
+    aplicada sobre los movimientos ya guardados de esa carga -- no
+    reimplementa ningun filtro ni calculo de IVA, solo reusa esas
+    funciones para que lo mostrado en pantalla coincida exactamente con
+    lo que trae el Excel de esa combinacion.
 
-    None si la base no responde o no se pudo reconstruir el detalle.
+    Devuelve (detalle_df, resumen): resumen es el dict de
+    build_latam_resumen() para LATAM (con total_la/neto_gravado/iva/
+    total_4m/total_periodo/sums, igual que la hoja "Resumen Facturación"
+    del Excel real), o None para el resto (Avianca/Gol no tienen resumen
+    formal, son hojas simples).
+
+    None (no la tupla) si la base no responde o no se pudo reconstruir
+    el detalle.
     """
     movimientos = obtener_movimientos_de_carga(int(fila["carga_id"]))
     if movimientos is None:
@@ -492,7 +507,9 @@ def _obtener_detalle_liquidacion(fila) -> pd.DataFrame | None:
     tipo_cargo = fila["tipo_cargo"]
 
     if tipo_cargo == "latam_liquidacion":
-        return build_latam_detalle(movimientos, period=period)
+        detalle = build_latam_detalle(movimientos, period=period)
+        resumen = build_latam_resumen(detalle)
+        return detalle, resumen
 
     charge_cfg = CHARGE_TYPES.get(tipo_cargo)
     if charge_cfg is None:
@@ -502,7 +519,10 @@ def _obtener_detalle_liquidacion(fila) -> pd.DataFrame | None:
         sheet_name = f"{charge_cfg['sheet_prefix']} {fila['estacion']}"
     else:
         sheet_name = charge_cfg["sheet_name"]
-    return sheets.get(sheet_name)
+    detalle = sheets.get(sheet_name)
+    if detalle is None:
+        return None
+    return detalle, None
 
 
 def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, str]]:
@@ -861,17 +881,65 @@ with tab_historial:
                     st.info("Esta liquidación no tiene movimientos asociados (sin movimiento).", icon="🔍")
                 else:
                     with st.spinner("Cargando detalle..."):
-                        detalle_df = _obtener_detalle_liquidacion(fila_sel)
-                    if detalle_df is None:
+                        resultado_detalle = _obtener_detalle_liquidacion(fila_sel)
+                    if resultado_detalle is None:
                         st.warning(
                             "No se pudo cargar el detalle ahora mismo. Probá de nuevo en unos minutos.",
                             icon="⚠️",
                         )
                     else:
-                        st.caption(
-                            f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
-                            "liquidación (report_builder.py / liquidacion_builder.py), sin recalcular nada."
-                        )
+                        detalle_df, resumen = resultado_detalle
+
+                        if resumen is not None:
+                            # Resumen Facturacion (solo LATAM): mismo
+                            # desglose de IVA que trae la hoja real del
+                            # Excel -- sub-items de cada sub-factura,
+                            # TOTAL LA, IVA, TOTAL 4M y TOTAL PERIODO.
+                            # build_latam_resumen() es la MISMA funcion que
+                            # usa write_liquidacion() para el Excel real
+                            # (ver _write_resumen_sheet en
+                            # liquidacion_builder.py), no una
+                            # reimplementacion del calculo de IVA.
+                            la_rows = "".join(
+                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                                f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
+                                for col in LATAM_SUBFACTURA_LA
+                            )
+                            m4_rows = "".join(
+                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                                f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
+                                for col in LATAM_SUBFACTURA_4M
+                            )
+                            st.markdown(
+                                f'<div class="hwc-group-card">'
+                                f'<div class="hwc-group-title">🧾 Resumen Facturación</div>'
+                                f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);">LATAM AIRLINES</div>'
+                                f'{la_rows}'
+                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
+                                f'<b>TOTAL LA (sin IVA)</b><span class="hwc-count">{_money(resumen["total_la"])}</span></div>'
+                                f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);margin-top:0.6rem;">LAN ARGENTINA</div>'
+                                f'{m4_rows}'
+                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">%</span>'
+                                f'IVA (21%, informativo)<span class="hwc-count">{_money(resumen["iva"])}</span></div>'
+                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
+                                f'<b>TOTAL 4M (con IVA)</b><span class="hwc-count">{_money(resumen["total_4m"])}</span></div>'
+                                f'<div class="hwc-row hwc-row-active" style="margin-top:0.5rem;border-top:1px solid var(--hwc-border);padding-top:0.6rem;">'
+                                f'<span class="hwc-dot hwc-dot-active">✓</span><b>TOTAL PERIODO</b>'
+                                f'<span class="hwc-count">{_money(resumen["total_periodo"])}</span></div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.caption(
+                                f"{len(detalle_df)} filas de detalle (hoja \"Detalle de Facturación\") — "
+                                "mismo filtrado y mismo cálculo de IVA que el Excel real de esta liquidación "
+                                "(liquidacion_builder.py), sin recalcular nada distinto."
+                            )
+                        else:
+                            st.caption(
+                                f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
+                                "liquidación (report_builder.py), sin recalcular nada."
+                            )
+
                         # Alto dinamico hasta un tope: con liquidaciones
                         # chicas (ej. 3 filas) no deja un montón de grilla
                         # vacia; con liquidaciones grandes (ej. 1033 filas)

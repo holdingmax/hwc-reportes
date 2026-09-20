@@ -752,6 +752,61 @@ with tab_historial:
                         "marcadas como \"Anterior\", solo para trazabilidad."
                     )
 
+                # ---------------------------------------------------------
+                # Dos graficos simples, nativos de Streamlit (sin libs
+                # nuevas). Ambos usan SOLO montos vigentes (misma logica
+                # que el total de arriba) para no duplicar plata.
+                # ---------------------------------------------------------
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    st.markdown(
+                        '<div class="hwc-group-title">📊 Total facturado por aerolínea</div>',
+                        unsafe_allow_html=True,
+                    )
+                    por_aerolinea = (
+                        vigentes.assign(_aerolinea=vigentes["aerolinea"].str.upper())
+                        .groupby("_aerolinea")["monto_total"]
+                        .sum()
+                    )
+                    st.bar_chart(por_aerolinea, color="#2D79AB", use_container_width=True)
+
+                with col_chart2:
+                    st.markdown(
+                        '<div class="hwc-group-title">📈 Evolución por mes</div>',
+                        unsafe_allow_html=True,
+                    )
+                    # A proposito ignora el filtro de periodo (pasa None):
+                    # el punto de este grafico es mostrar varios meses a la
+                    # vez, asi que no tiene sentido dejar que el propio
+                    # filtro de periodo lo colapse a una sola barra. Si
+                    # respeta aerolinea/estacion, igual que el de al lado.
+                    evolucion_df = obtener_historial(aerolinea_filtro, None, estacion_filtro)
+                    if evolucion_df is None:
+                        st.caption("No se pudo cargar la evolución mensual ahora mismo.")
+                    else:
+                        evolucion_vigente = evolucion_df[evolucion_df["es_vigente"]].copy()
+                        evolucion_vigente["_periodo_label"] = [
+                            period_label((mes, anio))
+                            for mes, anio in zip(evolucion_vigente["periodo_mes"], evolucion_vigente["periodo_anio"])
+                        ]
+                        por_mes = (
+                            evolucion_vigente.sort_values("periodo")
+                            .groupby("_periodo_label", sort=False)["monto_total"]
+                            .sum()
+                        )
+                        # st.bar_chart (Vega-Lite por debajo) ordena el eje
+                        # de categorias alfabeticamente por defecto, no por
+                        # el orden de las filas -- "julio" quedaba antes que
+                        # "mayo" a pesar del sort_values de arriba. Un
+                        # CategoricalIndex ordered=True con las categorias
+                        # ya en orden cronologico fuerza el orden real.
+                        por_mes.index = pd.CategoricalIndex(
+                            por_mes.index, categories=list(por_mes.index), ordered=True
+                        )
+                        st.bar_chart(por_mes, color="#3895D1", use_container_width=True)
+                        if len(por_mes) == 1:
+                            st.caption("Todavía hay un solo período cargado — este gráfico va a sumar meses a medida que se generen más reportes.")
+
                 tabla = pd.DataFrame({
                     "Vigencia": historial_df["es_vigente"].map(lambda v: "✓ Vigente" if v else "— Anterior"),
                     "Fecha de generación": historial_df["generado_en"].dt.strftime("%d/%m/%Y %H:%M") + " UTC",

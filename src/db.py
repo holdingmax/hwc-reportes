@@ -370,7 +370,7 @@ def obtener_historial(
         # navegador real, no es una precaucion teorica.
         query = """
             SELECT carga_id, generado_en, aerolinea, estacion, tipo_cargo,
-                   periodo_mes, periodo_anio, cantidad_filas, monto_total,
+                   periodo_mes, periodo_anio, periodo, cantidad_filas, monto_total,
                    (ROW_NUMBER() OVER (
                        PARTITION BY aerolinea, estacion, tipo_cargo, periodo
                        ORDER BY generado_en DESC

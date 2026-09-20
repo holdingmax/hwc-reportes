@@ -113,7 +113,26 @@ def _get_connection() -> psycopg.Connection | None:
     # caida de red), esto tiene que fallar rapido, no colgar la app entera
     # esperando el timeout de TCP del sistema operativo (que puede ser de
     # varios minutos).
-    return psycopg.connect(database_url, connect_timeout=5)
+    #
+    # autocommit=True es OBLIGATORIO aca, no cosmetico. Esta conexion vive
+    # cacheada (@st.cache_resource) y se REUSA entre reruns de Streamlit --
+    # y como st.tabs() ejecuta el codigo de TODOS los tabs en cada rerun
+    # (no solo el visible), un mismo rerun de "Generar reporte" tambien
+    # corre las lecturas de Historial (obtener_filtros_historial /
+    # obtener_historial), que hacen cur.execute(SELECT) sueltos sin
+    # with conn.transaction(). Sin autocommit, cada SELECT abre una
+    # transaccion implicita que nadie cierra; el PROXIMO
+    # with conn.transaction() (en guardar_reporte_simple) encuentra la
+    # conexion ya "dentro" de una transaccion y crea un SAVEPOINT anidado
+    # en vez de una transaccion nueva -- el INSERT se ve desde la MISMA
+    # conexion (por eso la app mostraba el dato bien) pero nunca se
+    # comittea de verdad, y desaparece en cuanto la conexion se recicla.
+    # Confirmado reproduciendo el bug con una conexion nueva independiente
+    # antes de este fix. Con autocommit=True cada statement suelto
+    # comittea solo, y with conn.transaction() sigue agrupando varias
+    # sentencias en una transaccion real (psycopg3 lo soporta igual en
+    # modo autocommit).
+    return psycopg.connect(database_url, connect_timeout=5, autocommit=True)
 
 
 def _guardar_carga(conn: psycopg.Connection, nombre_archivo: str, file_bytes: bytes, df: pd.DataFrame) -> int:

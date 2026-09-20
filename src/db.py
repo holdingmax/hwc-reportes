@@ -329,9 +329,17 @@ def obtener_historial(
     """Liquidaciones filtradas (mas recientes primero). Solo lectura.
 
     Cada fila es UN reporte generado (ver guardar_reporte_simple /
-    guardar_liquidacion_latam): si el mismo periodo/aerolinea se genero
-    mas de una vez, aparece mas de una vez aca -- es historial real, no un
-    resumen deduplicado. Un None en cualquier filtro significa "todos".
+    guardar_liquidacion_latam): si el mismo periodo/aerolinea/estacion/tipo
+    de cargo se genero mas de una vez, aparecen todas aca -- es historial
+    real para trazabilidad, no un resumen deduplicado.
+
+    La columna "es_vigente" marca, por combinacion (aerolinea, estacion,
+    tipo_cargo, periodo), cual es la fila de generado_en mas reciente
+    (True) vs. generaciones anteriores de la misma combinacion (False).
+    Quien consuma esto para sumar un total debe filtrar por es_vigente
+    para no duplicar plata si algo se regenero -- ver su uso en app.py.
+
+    Un None en cualquier filtro significa "todos".
     """
     try:
         conn = _get_connection()
@@ -343,7 +351,11 @@ def obtener_historial(
         # navegador real, no es una precaucion teorica.
         query = """
             SELECT generado_en, aerolinea, estacion, tipo_cargo, periodo_mes,
-                   periodo_anio, cantidad_filas, monto_total
+                   periodo_anio, cantidad_filas, monto_total,
+                   (ROW_NUMBER() OVER (
+                       PARTITION BY aerolinea, estacion, tipo_cargo, periodo
+                       ORDER BY generado_en DESC
+                   ) = 1) AS es_vigente
             FROM liquidaciones
             WHERE (%(aerolinea)s::text IS NULL OR aerolinea = %(aerolinea)s::text)
               AND (%(periodo)s::date IS NULL OR periodo = %(periodo)s::date)

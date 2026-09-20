@@ -690,28 +690,36 @@ with tab_historial:
             elif historial_df.empty:
                 st.info("No hay liquidaciones para los filtros seleccionados.", icon="🔍")
             else:
-                total = float(historial_df["monto_total"].fillna(0).sum())
-                cantidad = len(historial_df)
-                combinaciones_unicas = historial_df[
-                    ["aerolinea", "estacion", "tipo_cargo", "periodo_mes", "periodo_anio"]
-                ].drop_duplicates().shape[0]
+                # El total SOLO suma la generacion mas reciente de cada
+                # combinacion (aerolinea/estacion/tipo_cargo/periodo) --
+                # es_vigente lo calcula obtener_historial() con ROW_NUMBER().
+                # Si algo se regenero, la tabla de abajo sigue mostrando
+                # todas las corridas para trazabilidad, pero el numero
+                # grande no debe duplicar plata.
+                vigentes = historial_df[historial_df["es_vigente"]]
+                total = float(vigentes["monto_total"].fillna(0).sum())
+                cantidad_vigente = len(vigentes)
+                cantidad_total = len(historial_df)
 
                 st.markdown(
                     f'<div class="hwc-group-card">'
                     f'<div class="hwc-group-title">Σ Total filtrado</div>'
                     f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
-                    f'{cantidad} liquidaci{"ón" if cantidad == 1 else "ones"}'
+                    f'{cantidad_vigente} liquidaci{"ón" if cantidad_vigente == 1 else "ones"} vigente{"" if cantidad_vigente == 1 else "s"}'
                     f'<span class="hwc-count">{_money(total)}</span></div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
-                if cantidad > combinaciones_unicas:
+                if cantidad_total > cantidad_vigente:
                     st.caption(
-                        "⚠️ Hay más de una generación guardada para la misma combinación "
-                        "aerolínea/estación/período — el total suma todas, no solo la última."
+                        f"ℹ️ Hay {cantidad_total - cantidad_vigente} generación(es) anterior(es) para "
+                        "alguna combinación aerolínea/estación/tipo de cargo/período — el total de "
+                        "arriba usa solo la más reciente de cada una. Las anteriores siguen abajo, "
+                        "marcadas como \"Anterior\", solo para trazabilidad."
                     )
 
                 tabla = pd.DataFrame({
+                    "Vigencia": historial_df["es_vigente"].map(lambda v: "✓ Vigente" if v else "— Anterior"),
                     "Fecha de generación": historial_df["generado_en"].dt.strftime("%d/%m/%Y %H:%M") + " UTC",
                     "Aerolínea": historial_df["aerolinea"].str.upper(),
                     "Estación": historial_df["estacion"],

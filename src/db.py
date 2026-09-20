@@ -369,8 +369,8 @@ def obtener_historial(
         # y comparacion) y psycopg tira AmbiguousParameter -- probado en el
         # navegador real, no es una precaucion teorica.
         query = """
-            SELECT generado_en, aerolinea, estacion, tipo_cargo, periodo_mes,
-                   periodo_anio, cantidad_filas, monto_total,
+            SELECT carga_id, generado_en, aerolinea, estacion, tipo_cargo,
+                   periodo_mes, periodo_anio, cantidad_filas, monto_total,
                    (ROW_NUMBER() OVER (
                        PARTITION BY aerolinea, estacion, tipo_cargo, periodo
                        ORDER BY generado_en DESC
@@ -383,6 +383,61 @@ def obtener_historial(
         """
         params = {"aerolinea": aerolinea, "periodo": periodo, "estacion": estacion}
         return pd.read_sql(query, conn, params=params)
+    except Exception:
+        _get_connection.clear()
+        return None
+
+
+def obtener_movimientos_de_carga(carga_id: int) -> pd.DataFrame | None:
+    """Movimientos crudos de una carga, con los mismos nombres de columna
+    que trae el archivo original (Codigo, Cod.Vuelo, etc. -- via alias SQL
+    a los mismos COL_* de config.py que usa el resto de la app).
+
+    Es deliberado devolverlos con esos nombres: el resultado esta pensado
+    para pasarse directo a build_airline_report()/build_latam_detalle()
+    (ver su uso en app.py) y asi obtener el mismo detalle que ya calcula
+    el Excel real para esa liquidacion, sin reimplementar ningun filtro
+    aca -- este modulo solo hace la lectura, la logica de filtrado sigue
+    viviendo exclusivamente en report_builder.py/liquidacion_builder.py.
+
+    Solo lectura. None si la base no responde (mismo criterio fail-soft
+    que el resto de este modulo).
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return None
+        query = f"""
+            SELECT
+                codigo AS "{COL_CODIGO}",
+                cod_vuelo AS "{COL_COD_VUELO}",
+                cliente AS "{COL_CLIENTE}",
+                condicion AS "{COL_CONDICION}",
+                tipo AS "{COL_TIPO}",
+                tpo_cambio AS "{COL_TPO_CAMBIO}",
+                dry_fee AS "{COL_DRY_FEE}",
+                aduana AS "{COL_ADUANA}",
+                trans_e AS "{COL_TRANS_E}",
+                iata AS "{COL_IATA}",
+                collect AS "{COL_COLLECT}",
+                aerolinea AS "{COL_AEROLINEA}",
+                estacion AS "{COL_ESTACION}"
+            FROM movimientos_awb
+            WHERE carga_id = %(carga_id)s
+        """
+        movimientos = pd.read_sql(query, conn, params={"carga_id": carga_id})
+        # Los montos (a diferencia de Tpo.Cambio, que es un tipo de cambio
+        # con decimales de verdad) son siempre pesos enteros en el archivo
+        # original -- ver por ejemplo _apply_delivery_fee_override en
+        # report_builder.py, que tambien los deja en int64. NUMERIC en
+        # Postgres vuelve como float64 (ej. 264250.0); castear a Int64
+        # (nullable) evita un ".0" que no aparece en el Excel real.
+        for col in (COL_DRY_FEE, COL_ADUANA, COL_TRANS_E, COL_IATA, COL_COLLECT):
+            # .round() antes del cast: NUMERIC->float64 puede traer un
+            # residuo de punto flotante (ej. 264249.999999998) que
+            # astype("Int64") directo rechaza por no ser un cast seguro.
+            movimientos[col] = movimientos[col].round().astype("Int64")
+        return movimientos
     except Exception:
         _get_connection.clear()
         return None

@@ -41,6 +41,7 @@ from src.db import (
     guardar_reporte_simple,
     obtener_filtros_historial,
     obtener_historial,
+    obtener_movimientos_de_carga,
 )
 from src.liquidacion_builder import (
     build_latam_detalle,
@@ -471,6 +472,39 @@ def _money(value: float) -> str:
     return f"$ {value:,.2f}"
 
 
+def _obtener_detalle_liquidacion(fila) -> pd.DataFrame | None:
+    """Detalle linea por linea de una liquidacion del Historial.
+
+    Se calcula con la MISMA logica que arma el Excel real
+    (build_airline_report / build_latam_detalle) aplicada sobre los
+    movimientos ya guardados de esa carga -- no reimplementa ningun
+    filtro de estacion/aerolinea/periodo, solo reusa esas funciones para
+    que el detalle mostrado en pantalla coincida exactamente con lo que
+    trae el Excel de esa combinacion.
+
+    None si la base no responde o no se pudo reconstruir el detalle.
+    """
+    movimientos = obtener_movimientos_de_carga(int(fila["carga_id"]))
+    if movimientos is None:
+        return None
+
+    period = (fila["periodo_mes"], fila["periodo_anio"])
+    tipo_cargo = fila["tipo_cargo"]
+
+    if tipo_cargo == "latam_liquidacion":
+        return build_latam_detalle(movimientos, period=period)
+
+    charge_cfg = CHARGE_TYPES.get(tipo_cargo)
+    if charge_cfg is None:
+        return None
+    sheets = build_airline_report(movimientos, fila["aerolinea"], period=period)
+    if charge_cfg.get("per_station"):
+        sheet_name = f"{charge_cfg['sheet_prefix']} {fila['estacion']}"
+    else:
+        sheet_name = charge_cfg["sheet_name"]
+    return sheets.get(sheet_name)
+
+
 def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, str]]:
     """Corre el flujo de liquidacion de LATAM y muestra su propio resumen.
 
@@ -734,5 +768,61 @@ with tab_historial:
                     "Monto total": historial_df["monto_total"].fillna(0).map(_money),
                 })
                 st.dataframe(tabla, use_container_width=True, hide_index=True)
+
+                # ---------------------------------------------------------
+                # Detalle linea por linea de UNA liquidacion puntual. El
+                # combo de abajo referencia filas de historial_df por
+                # posicion (indice 0..N-1), no por un id propio -- alcanza
+                # porque se reconstruye en cada rerun a partir del mismo
+                # query, en el mismo orden.
+                # ---------------------------------------------------------
+                st.markdown(
+                    '<div class="hwc-step" style="margin-top:1.4rem;">'
+                    '<span class="hwc-step-num">🔎</span>Ver detalle de una liquidación</div>',
+                    unsafe_allow_html=True,
+                )
+
+                def _etiqueta_detalle(i: int) -> str:
+                    fila = historial_df.iloc[i]
+                    tipo_label = CHARGE_TYPE_LABELS.get(fila["tipo_cargo"], ("", fila["tipo_cargo"]))[1]
+                    periodo_txt = period_label((fila["periodo_mes"], fila["periodo_anio"]))
+                    fecha_txt = fila["generado_en"].strftime("%d/%m/%Y %H:%M UTC")
+                    vigencia_txt = "vigente" if fila["es_vigente"] else "anterior"
+                    return (
+                        f"{fila['aerolinea'].upper()} · {fila['estacion']} · {tipo_label} · "
+                        f"{periodo_txt} · {fecha_txt} ({vigencia_txt})"
+                    )
+
+                seleccion = st.selectbox(
+                    "Elegí una liquidación para ver su detalle línea por línea",
+                    options=range(len(historial_df)),
+                    format_func=_etiqueta_detalle,
+                    label_visibility="collapsed",
+                    key="hist_detalle_selector",
+                )
+                fila_sel = historial_df.iloc[seleccion]
+
+                if fila_sel["cantidad_filas"] == 0:
+                    st.info("Esta liquidación no tiene movimientos asociados (sin movimiento).", icon="🔍")
+                else:
+                    with st.spinner("Cargando detalle..."):
+                        detalle_df = _obtener_detalle_liquidacion(fila_sel)
+                    if detalle_df is None:
+                        st.warning(
+                            "No se pudo cargar el detalle ahora mismo. Probá de nuevo en unos minutos.",
+                            icon="⚠️",
+                        )
+                    else:
+                        st.caption(
+                            f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
+                            "liquidación (report_builder.py / liquidacion_builder.py), sin recalcular nada."
+                        )
+                        # Alto dinamico hasta un tope: con liquidaciones
+                        # chicas (ej. 3 filas) no deja un montón de grilla
+                        # vacia; con liquidaciones grandes (ej. 1033 filas)
+                        # se topea en 420px y scrollea adentro del recuadro
+                        # en vez de estirar la pagina entera.
+                        alto_tabla = min(420, 38 * (len(detalle_df) + 1) + 4)
+                        st.dataframe(detalle_df, use_container_width=True, hide_index=True, height=alto_tabla)
 
 st.markdown('<div class="hwc-footer">Handyway Cargo · Automatización de reportes</div>', unsafe_allow_html=True)

@@ -32,6 +32,7 @@ import base64
 import io
 import os
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -346,6 +347,15 @@ div[data-baseweb="select"] > div {{ border-radius: 8px !important; }}
     height: 2.5px !important;
 }}
 
+/* --- Graficos del mini-dashboard del Historial: ocultar el menu "..."
+   (View Source / View Compiled Vega / Open in Vega Editor) que vega-embed
+   agrega solo por defecto -- es un menu de desarrollador, no algo para
+   los usuarios finales. Verificado contra el DOM real: es un <details>
+   sin clase propia, hijo directo de [data-testid="stVegaLiteChart"]. --- */
+[data-testid="stVegaLiteChart"] details {{
+    display: none !important;
+}}
+
 /* --- Footer --- */
 .hwc-footer {{
     text-align: center; color: var(--hwc-text-muted); font-size: 0.78rem;
@@ -477,6 +487,37 @@ def _sheets_for_charge_type(sheets: dict, charge_type_key: str) -> dict:
 
 def _money(value: float) -> str:
     return f"$ {value:,.2f}"
+
+
+def _grafico_barras(serie: pd.Series, nombre_categoria: str, color: str, orden: list[str] | None = None) -> alt.Chart:
+    """Grafico de barras del mini-dashboard del Historial, en Altair
+    directo (no st.bar_chart) para poder controlar tres cosas que
+    st.bar_chart no expone via parametros:
+    - Eje Y arrancando siempre en cero (scale zero=True explicito).
+    - Tooltip con etiquetas en español y formato de moneda, en vez de los
+      nombres de columna crudos (ej. "monto_total").
+    - Orden explicito del eje X cuando corresponde (ver "orden": la
+      evolucion por mes necesita orden cronologico, no alfabetico).
+    """
+    df = serie.reset_index()
+    df.columns = [nombre_categoria, "Total facturado"]
+    x_encoding = alt.X(
+        f"{nombre_categoria}:N",
+        title=None,
+        sort=orden if orden is not None else "-y",
+    )
+    return (
+        alt.Chart(df)
+        .mark_bar(color=color)
+        .encode(
+            x=x_encoding,
+            y=alt.Y("Total facturado:Q", title=None, scale=alt.Scale(zero=True)),
+            tooltip=[
+                alt.Tooltip(f"{nombre_categoria}:N", title=nombre_categoria),
+                alt.Tooltip("Total facturado:Q", title="Total facturado", format="$,.2f"),
+            ],
+        )
+    )
 
 
 def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | None:
@@ -788,7 +829,10 @@ with tab_historial:
                         .groupby("_aerolinea")["monto_total"]
                         .sum()
                     )
-                    st.bar_chart(por_aerolinea, color="#2D79AB", use_container_width=True)
+                    st.altair_chart(
+                        _grafico_barras(por_aerolinea, "Aerolínea", "#2D79AB"),
+                        use_container_width=True,
+                    )
 
                 with col_chart2:
                     st.markdown(
@@ -814,16 +858,15 @@ with tab_historial:
                             .groupby("_periodo_label", sort=False)["monto_total"]
                             .sum()
                         )
-                        # st.bar_chart (Vega-Lite por debajo) ordena el eje
-                        # de categorias alfabeticamente por defecto, no por
-                        # el orden de las filas -- "julio" quedaba antes que
-                        # "mayo" a pesar del sort_values de arriba. Un
-                        # CategoricalIndex ordered=True con las categorias
-                        # ya en orden cronologico fuerza el orden real.
-                        por_mes.index = pd.CategoricalIndex(
-                            por_mes.index, categories=list(por_mes.index), ordered=True
+                        # El orden cronologico (no alfabetico -- "julio"
+                        # quedaria antes que "mayo") se fuerza pasando la
+                        # lista de categorias ya ordenada como "sort" del
+                        # eje X de Altair, en vez de alfabetico por
+                        # defecto.
+                        st.altair_chart(
+                            _grafico_barras(por_mes, "Período", "#3895D1", orden=list(por_mes.index)),
+                            use_container_width=True,
                         )
-                        st.bar_chart(por_mes, color="#3895D1", use_container_width=True)
                         if len(por_mes) == 1:
                             st.caption("Todavía hay un solo período cargado — este gráfico va a sumar meses a medida que se generen más reportes.")
 

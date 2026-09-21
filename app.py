@@ -11,11 +11,12 @@ ver ese modulo para el detalle. Es un efecto secundario que nunca bloquea ni
 cambia el Excel: si DATABASE_URL no esta configurada o la base falla, esas
 funciones no hacen nada y el flujo de descarga sigue exactamente igual.
 
-La pestaña "Historial" (mas abajo) es de SOLO LECTURA contra liquidaciones,
-via obtener_filtros_historial/obtener_historial en src/db.py -- no cambia ni
-depende del flujo de generacion, es una vista aparte sobre lo ya persistido.
-Mismo criterio fail-soft: si la base no responde, muestra un mensaje en vez
-de romper la pantalla.
+La seccion "Liquidaciones" (pagina principal, mas abajo) es de SOLO LECTURA
+contra lo ya persistido, via obtener_filtros_historial/obtener_historial en
+src/db.py -- no cambia ni depende de la carga de un archivo nuevo, que vive
+colapsada en el expander "+ Cargar archivo nuevo" arriba de todo. Mismo
+criterio fail-soft: si la base no responde, muestra un mensaje en vez de
+romper la pantalla.
 
 El estilo (paleta de azules extraida del logo, cards, tipografia, marca de
 agua) se inyecta como CSS via st.markdown(unsafe_allow_html=True), ya que
@@ -328,25 +329,6 @@ div[data-baseweb="select"] > div {{ border-radius: 8px !important; }}
     text-align: center;
 }}
 
-/* --- Tabs (Generar reporte / Historial). Selectores verificados contra el
-   DOM real: el highlight/subrayado activo es un div[data-baseweb="tab-highlight"]
-   hermano de los botones, no un pseudo-elemento de cada boton. --- */
-[data-testid="stTabs"] [role="tablist"] {{
-    border-bottom: 1px solid var(--hwc-border);
-    gap: 0.5rem;
-}}
-[data-testid="stTabs"] button[data-testid="stTab"] {{
-    color: var(--hwc-text-muted) !important;
-    font-weight: 600 !important;
-}}
-[data-testid="stTabs"] button[data-testid="stTab"][aria-selected="true"] {{
-    color: var(--hwc-blue-text) !important;
-}}
-[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
-    background-color: var(--hwc-blue) !important;
-    height: 2.5px !important;
-}}
-
 /* --- Graficos del mini-dashboard del Historial: ocultar el menu "..."
    (View Source / View Compiled Vega / Open in Vega Editor) que vega-embed
    agrega solo por defecto -- es un menu de desarrollador, no algo para
@@ -425,50 +407,9 @@ if not _check_password():
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Titulo principal (jerarquia por encima del banner de marca, sin tocarlo)
+# Funciones auxiliares de presentacion (definidas antes de usarse mas abajo,
+# tanto en la seccion de carga como en Liquidaciones).
 # ---------------------------------------------------------------------------
-st.markdown(
-    f'<div class="hwc-page-title"><img class="hwc-page-title-logo" src="{LOGO_DATA_URI}" alt="Handyway Cargo" />Handyway Cargo</div>',
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------------------
-# Banner de marca
-# ---------------------------------------------------------------------------
-st.markdown(
-    """
-<div class="hwc-hero">
-    <p class="hwc-hero-sub">Generá reportes automáticos por aerolínea a partir del archivo original de Handyway Cargo.</p>
-    <span class="hwc-hero-tag">Automatización de reportes</span>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------------------
-# Tabs: separan el flujo de generar reportes (de siempre) del Historial de
-# solo lectura (nuevo). No comparten estado mas que las variables de Python
-# ya usadas en el flujo de siempre -- el tab de Historial no lee ni escribe
-# nada de lo que pasa en el de Generar.
-# ---------------------------------------------------------------------------
-tab_historial, tab_generar = st.tabs(["📊 Liquidaciones", "📄 Generar reporte"])
-
-# ---------------------------------------------------------------------------
-# Seccion 1: subir archivo
-# ---------------------------------------------------------------------------
-with tab_generar:
-    with st.container(border=True, key="card_upload"):
-        st.markdown('<div class="hwc-step"><span class="hwc-step-num">1</span>📄 Subí el archivo</div>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Archivo original (export del sistema)", type="xlsx", label_visibility="collapsed")
-
-    # -----------------------------------------------------------------------
-    # Seccion 2: elegir aerolinea + generar
-    # -----------------------------------------------------------------------
-    with st.container(border=True, key="card_config"):
-        st.markdown('<div class="hwc-step"><span class="hwc-step-num">2</span>✈️ Elegí la aerolínea</div>', unsafe_allow_html=True)
-        airline_key = st.selectbox("Aerolínea", options=sorted(AIRLINE_CONFIGS), format_func=str.upper, label_visibility="collapsed")
-        generate = st.button("Generar reporte", disabled=uploaded_file is None, type="primary")
-
 
 def _sheets_for_charge_type(sheets: dict, charge_type_key: str) -> dict:
     """Agrupa las hojas ya generadas segun a que tipo de cargo pertenecen.
@@ -592,6 +533,8 @@ def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, 
         )
 
     st.success("Liquidación generada correctamente.", icon="✅")
+    st.success("Cargado — ya está disponible abajo, en Liquidaciones.", icon="✅")
+    st.session_state["_reabrir_carga"] = True
     st.caption(f"Período detectado: {period_label(period)}")
 
     if not excluded.empty:
@@ -649,11 +592,55 @@ def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, 
 
     return buffer, resumen, period
 
+# ---------------------------------------------------------------------------
+# Titulo principal (jerarquia por encima del banner de marca, sin tocarlo)
+# ---------------------------------------------------------------------------
+st.markdown(
+    f'<div class="hwc-page-title"><img class="hwc-page-title-logo" src="{LOGO_DATA_URI}" alt="Handyway Cargo" />Handyway Cargo</div>',
+    unsafe_allow_html=True,
+)
 
 # ---------------------------------------------------------------------------
-# Seccion 3: resultado
+# Banner de marca
 # ---------------------------------------------------------------------------
-with tab_generar:
+st.markdown(
+    """
+<div class="hwc-hero">
+    <p class="hwc-hero-sub">Consultá las liquidaciones ya generadas por aerolínea, o cargá un archivo nuevo para procesar.</p>
+    <span class="hwc-hero-tag">Liquidaciones Handyway Cargo</span>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------------
+# Carga de archivo: colapsada por defecto -- la pagina prioriza consultar lo
+# ya generado (Liquidaciones, mas abajo). El flag en session_state fuerza que
+# el expander quede abierto en el rerun que sigue a "Procesar y guardar": sin
+# esto, Streamlit lo volveria a cerrar solo porque el script se re-ejecuta
+# entero en cada interaccion (el "expanded" de abajo se re-evalua siempre).
+# ---------------------------------------------------------------------------
+if st.session_state.get("_reabrir_carga"):
+    st.session_state["expander_carga"] = True
+    st.session_state["_reabrir_carga"] = False
+
+with st.expander("+ Cargar archivo nuevo", expanded=False, key="expander_carga"):
+    with st.container(border=True, key="card_upload"):
+        st.markdown('<div class="hwc-step"><span class="hwc-step-num">1</span>📄 Subí el archivo</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Archivo original (export del sistema)", type="xlsx", label_visibility="collapsed")
+
+    # -----------------------------------------------------------------------
+    # Seccion 2: elegir aerolinea + generar
+    # -----------------------------------------------------------------------
+    with st.container(border=True, key="card_config"):
+        st.markdown('<div class="hwc-step"><span class="hwc-step-num">2</span>✈️ Elegí la aerolínea</div>', unsafe_allow_html=True)
+        airline_key = st.selectbox("Aerolínea", options=sorted(AIRLINE_CONFIGS), format_func=str.upper, label_visibility="collapsed")
+        generate = st.button("Procesar y guardar", disabled=uploaded_file is None, type="primary")
+
+    # -----------------------------------------------------------------------
+    # Seccion 3: resultado (mismo expander -- no hace falta salir de "+
+    # Cargar archivo nuevo" para ver lo que se acaba de procesar).
+    # -----------------------------------------------------------------------
     if generate:
         with st.container(border=True, key="card_result"):
             st.markdown('<div class="hwc-step"><span class="hwc-step-num">3</span>📊 Resultado</div>', unsafe_allow_html=True)
@@ -682,6 +669,8 @@ with tab_generar:
                     )
 
                 st.success("Reporte generado correctamente.", icon="✅")
+                st.success("Cargado — ya está disponible abajo, en Liquidaciones.", icon="✅")
+                st.session_state["_reabrir_carga"] = True
                 st.caption(f"Período detectado: {period_label(period)}")
 
                 if not excluded.empty:
@@ -732,12 +721,13 @@ with tab_generar:
                         unsafe_allow_html=True,
                     )
 
+            st.caption("Descarga opcional — la liquidación ya quedó guardada.")
             st.download_button(
-                label="⬇️ Descargar reporte",
+                label="⬇️ Descargar Excel",
                 data=buffer,
                 file_name=f"{airline_key}_{period_slug(period)}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
+                type="secondary",
             )
 
 # ---------------------------------------------------------------------------
@@ -745,250 +735,249 @@ with tab_generar:
 # obtener_filtros_historial/obtener_historial en src/db.py). No recalcula
 # nada -- muestra tal cual lo que guardo cada "Generar reporte" pasado.
 # ---------------------------------------------------------------------------
-with tab_historial:
-    with st.container(border=True, key="card_historial"):
-        st.markdown('<div class="hwc-step">📊 Liquidaciones</div>', unsafe_allow_html=True)
-        st.caption("Consulta de solo lectura sobre lo ya generado y guardado — no vuelve a calcular nada.")
+with st.container(border=True, key="card_historial"):
+    st.markdown('<div class="hwc-step">📊 Liquidaciones</div>', unsafe_allow_html=True)
+    st.caption("Consulta de solo lectura sobre lo ya generado y guardado — no vuelve a calcular nada.")
 
-        filtros = obtener_filtros_historial()
+    filtros = obtener_filtros_historial()
 
-        if filtros is None:
-            st.info(
-                "El historial no está disponible en este momento (sin conexión a la base de datos). "
-                "Podés seguir generando y descargando reportes con normalidad en la otra pestaña.",
-                icon="🗄️",
-            )
-        elif not filtros["aerolineas"]:
-            st.info("Todavía no hay ningún reporte generado guardado en el historial.", icon="🗄️")
+    if filtros is None:
+        st.info(
+            "El historial no está disponible en este momento (sin conexión a la base de datos). "
+            "Podés seguir generando y descargando reportes con normalidad desde \"+ Cargar archivo nuevo\".",
+            icon="🗄️",
+        )
+    elif not filtros["aerolineas"]:
+        st.info("Todavía no hay ningún reporte generado guardado en el historial.", icon="🗄️")
+    else:
+        col_aerolinea, col_periodo, col_estacion = st.columns(3)
+        with col_aerolinea:
+            aerolinea_opciones = ["Todas"] + [a.upper() for a in filtros["aerolineas"]]
+            aerolinea_sel = st.selectbox("Aerolínea", aerolinea_opciones, key="hist_aerolinea")
+        with col_periodo:
+            periodo_opciones = {"Todos": None}
+            for periodo_fecha, mes, anio in filtros["periodos"]:
+                periodo_opciones[period_label((mes, anio))] = periodo_fecha
+            periodo_sel_label = st.selectbox("Período", list(periodo_opciones.keys()), key="hist_periodo")
+        with col_estacion:
+            estacion_opciones = ["Todas"] + filtros["estaciones"]
+            estacion_sel = st.selectbox("Estación", estacion_opciones, key="hist_estacion")
+
+        aerolinea_filtro = None if aerolinea_sel == "Todas" else aerolinea_sel.lower()
+        periodo_filtro = periodo_opciones[periodo_sel_label]
+        estacion_filtro = None if estacion_sel == "Todas" else estacion_sel
+
+        historial_df = obtener_historial(aerolinea_filtro, periodo_filtro, estacion_filtro)
+
+        if historial_df is None:
+            st.warning("No se pudo consultar el historial ahora mismo. Probá de nuevo en unos minutos.", icon="⚠️")
+        elif historial_df.empty:
+            st.info("No hay liquidaciones para los filtros seleccionados.", icon="🔍")
         else:
-            col_aerolinea, col_periodo, col_estacion = st.columns(3)
-            with col_aerolinea:
-                aerolinea_opciones = ["Todas"] + [a.upper() for a in filtros["aerolineas"]]
-                aerolinea_sel = st.selectbox("Aerolínea", aerolinea_opciones, key="hist_aerolinea")
-            with col_periodo:
-                periodo_opciones = {"Todos": None}
-                for periodo_fecha, mes, anio in filtros["periodos"]:
-                    periodo_opciones[period_label((mes, anio))] = periodo_fecha
-                periodo_sel_label = st.selectbox("Período", list(periodo_opciones.keys()), key="hist_periodo")
-            with col_estacion:
-                estacion_opciones = ["Todas"] + filtros["estaciones"]
-                estacion_sel = st.selectbox("Estación", estacion_opciones, key="hist_estacion")
+            # El total SOLO suma la generacion mas reciente de cada
+            # combinacion (aerolinea/estacion/tipo_cargo/periodo) --
+            # es_vigente lo calcula obtener_historial() con ROW_NUMBER().
+            # Si algo se regenero, la tabla de abajo sigue mostrando
+            # todas las corridas para trazabilidad, pero el numero
+            # grande no debe duplicar plata.
+            vigentes = historial_df[historial_df["es_vigente"]]
+            total = float(vigentes["monto_total"].fillna(0).sum())
+            cantidad_vigente = len(vigentes)
+            cantidad_total = len(historial_df)
 
-            aerolinea_filtro = None if aerolinea_sel == "Todas" else aerolinea_sel.lower()
-            periodo_filtro = periodo_opciones[periodo_sel_label]
-            estacion_filtro = None if estacion_sel == "Todas" else estacion_sel
+            st.markdown(
+                f'<div class="hwc-group-card">'
+                f'<div class="hwc-group-title">Σ Total filtrado</div>'
+                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                f'{cantidad_vigente} liquidaci{"ón" if cantidad_vigente == 1 else "ones"} vigente{"" if cantidad_vigente == 1 else "s"}'
+                f'<span class="hwc-count">{_money(total)}</span></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if cantidad_total > cantidad_vigente:
+                st.caption(
+                    f"ℹ️ Hay {cantidad_total - cantidad_vigente} generación(es) anterior(es) para "
+                    "alguna combinación aerolínea/estación/tipo de cargo/período — el total de "
+                    "arriba usa solo la más reciente de cada una. Las anteriores siguen abajo, "
+                    "marcadas como \"Anterior\", solo para trazabilidad."
+                )
 
-            historial_df = obtener_historial(aerolinea_filtro, periodo_filtro, estacion_filtro)
-
-            if historial_df is None:
-                st.warning("No se pudo consultar el historial ahora mismo. Probá de nuevo en unos minutos.", icon="⚠️")
-            elif historial_df.empty:
-                st.info("No hay liquidaciones para los filtros seleccionados.", icon="🔍")
-            else:
-                # El total SOLO suma la generacion mas reciente de cada
-                # combinacion (aerolinea/estacion/tipo_cargo/periodo) --
-                # es_vigente lo calcula obtener_historial() con ROW_NUMBER().
-                # Si algo se regenero, la tabla de abajo sigue mostrando
-                # todas las corridas para trazabilidad, pero el numero
-                # grande no debe duplicar plata.
-                vigentes = historial_df[historial_df["es_vigente"]]
-                total = float(vigentes["monto_total"].fillna(0).sum())
-                cantidad_vigente = len(vigentes)
-                cantidad_total = len(historial_df)
-
+            # ---------------------------------------------------------
+            # Dos graficos simples, nativos de Streamlit (sin libs
+            # nuevas). Ambos usan SOLO montos vigentes (misma logica
+            # que el total de arriba) para no duplicar plata.
+            # ---------------------------------------------------------
+            col_chart1, col_chart2 = st.columns(2)
+            with col_chart1:
                 st.markdown(
-                    f'<div class="hwc-group-card">'
-                    f'<div class="hwc-group-title">Σ Total filtrado</div>'
-                    f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
-                    f'{cantidad_vigente} liquidaci{"ón" if cantidad_vigente == 1 else "ones"} vigente{"" if cantidad_vigente == 1 else "s"}'
-                    f'<span class="hwc-count">{_money(total)}</span></div>'
-                    f'</div>',
+                    '<div class="hwc-group-title">📊 Total facturado por aerolínea</div>',
                     unsafe_allow_html=True,
                 )
-                if cantidad_total > cantidad_vigente:
-                    st.caption(
-                        f"ℹ️ Hay {cantidad_total - cantidad_vigente} generación(es) anterior(es) para "
-                        "alguna combinación aerolínea/estación/tipo de cargo/período — el total de "
-                        "arriba usa solo la más reciente de cada una. Las anteriores siguen abajo, "
-                        "marcadas como \"Anterior\", solo para trazabilidad."
-                    )
+                por_aerolinea = (
+                    vigentes.assign(_aerolinea=vigentes["aerolinea"].str.upper())
+                    .groupby("_aerolinea")["monto_total"]
+                    .sum()
+                )
+                st.altair_chart(
+                    _grafico_barras(por_aerolinea, "Aerolínea", "#2D79AB"),
+                    use_container_width=True,
+                )
 
-                # ---------------------------------------------------------
-                # Dos graficos simples, nativos de Streamlit (sin libs
-                # nuevas). Ambos usan SOLO montos vigentes (misma logica
-                # que el total de arriba) para no duplicar plata.
-                # ---------------------------------------------------------
-                col_chart1, col_chart2 = st.columns(2)
-                with col_chart1:
-                    st.markdown(
-                        '<div class="hwc-group-title">📊 Total facturado por aerolínea</div>',
-                        unsafe_allow_html=True,
-                    )
-                    por_aerolinea = (
-                        vigentes.assign(_aerolinea=vigentes["aerolinea"].str.upper())
-                        .groupby("_aerolinea")["monto_total"]
+            with col_chart2:
+                st.markdown(
+                    '<div class="hwc-group-title">📈 Evolución por mes</div>',
+                    unsafe_allow_html=True,
+                )
+                # A proposito ignora el filtro de periodo (pasa None):
+                # el punto de este grafico es mostrar varios meses a la
+                # vez, asi que no tiene sentido dejar que el propio
+                # filtro de periodo lo colapse a una sola barra. Si
+                # respeta aerolinea/estacion, igual que el de al lado.
+                evolucion_df = obtener_historial(aerolinea_filtro, None, estacion_filtro)
+                if evolucion_df is None:
+                    st.caption("No se pudo cargar la evolución mensual ahora mismo.")
+                else:
+                    evolucion_vigente = evolucion_df[evolucion_df["es_vigente"]].copy()
+                    evolucion_vigente["_periodo_label"] = [
+                        period_label((mes, anio))
+                        for mes, anio in zip(evolucion_vigente["periodo_mes"], evolucion_vigente["periodo_anio"])
+                    ]
+                    por_mes = (
+                        evolucion_vigente.sort_values("periodo")
+                        .groupby("_periodo_label", sort=False)["monto_total"]
                         .sum()
                     )
+                    # El orden cronologico (no alfabetico -- "julio"
+                    # quedaria antes que "mayo") se fuerza pasando la
+                    # lista de categorias ya ordenada como "sort" del
+                    # eje X de Altair, en vez de alfabetico por
+                    # defecto.
                     st.altair_chart(
-                        _grafico_barras(por_aerolinea, "Aerolínea", "#2D79AB"),
+                        _grafico_barras(por_mes, "Período", "#3895D1", orden=list(por_mes.index)),
                         use_container_width=True,
                     )
+                    if len(por_mes) == 1:
+                        st.caption("Todavía hay un solo período cargado — este gráfico va a sumar meses a medida que se generen más reportes.")
 
-                with col_chart2:
-                    st.markdown(
-                        '<div class="hwc-group-title">📈 Evolución por mes</div>',
-                        unsafe_allow_html=True,
-                    )
-                    # A proposito ignora el filtro de periodo (pasa None):
-                    # el punto de este grafico es mostrar varios meses a la
-                    # vez, asi que no tiene sentido dejar que el propio
-                    # filtro de periodo lo colapse a una sola barra. Si
-                    # respeta aerolinea/estacion, igual que el de al lado.
-                    evolucion_df = obtener_historial(aerolinea_filtro, None, estacion_filtro)
-                    if evolucion_df is None:
-                        st.caption("No se pudo cargar la evolución mensual ahora mismo.")
-                    else:
-                        evolucion_vigente = evolucion_df[evolucion_df["es_vigente"]].copy()
-                        evolucion_vigente["_periodo_label"] = [
-                            period_label((mes, anio))
-                            for mes, anio in zip(evolucion_vigente["periodo_mes"], evolucion_vigente["periodo_anio"])
-                        ]
-                        por_mes = (
-                            evolucion_vigente.sort_values("periodo")
-                            .groupby("_periodo_label", sort=False)["monto_total"]
-                            .sum()
-                        )
-                        # El orden cronologico (no alfabetico -- "julio"
-                        # quedaria antes que "mayo") se fuerza pasando la
-                        # lista de categorias ya ordenada como "sort" del
-                        # eje X de Altair, en vez de alfabetico por
-                        # defecto.
-                        st.altair_chart(
-                            _grafico_barras(por_mes, "Período", "#3895D1", orden=list(por_mes.index)),
-                            use_container_width=True,
-                        )
-                        if len(por_mes) == 1:
-                            st.caption("Todavía hay un solo período cargado — este gráfico va a sumar meses a medida que se generen más reportes.")
+            tabla = pd.DataFrame({
+                "Vigencia": historial_df["es_vigente"].map(lambda v: "✓ Vigente" if v else "— Anterior"),
+                "Fecha de generación": historial_df["generado_en"].dt.strftime("%d/%m/%Y %H:%M") + " UTC",
+                "Aerolínea": historial_df["aerolinea"].str.upper(),
+                "Estación": historial_df["estacion"],
+                "Tipo de cargo": historial_df["tipo_cargo"].map(
+                    lambda t: CHARGE_TYPE_LABELS.get(t, ("", t))[1]
+                ),
+                "Período": [
+                    period_label((mes, anio))
+                    for mes, anio in zip(historial_df["periodo_mes"], historial_df["periodo_anio"])
+                ],
+                "Movimientos": historial_df["cantidad_filas"],
+                "Monto total": historial_df["monto_total"].fillna(0).map(_money),
+            })
+            st.dataframe(tabla, use_container_width=True, hide_index=True)
 
-                tabla = pd.DataFrame({
-                    "Vigencia": historial_df["es_vigente"].map(lambda v: "✓ Vigente" if v else "— Anterior"),
-                    "Fecha de generación": historial_df["generado_en"].dt.strftime("%d/%m/%Y %H:%M") + " UTC",
-                    "Aerolínea": historial_df["aerolinea"].str.upper(),
-                    "Estación": historial_df["estacion"],
-                    "Tipo de cargo": historial_df["tipo_cargo"].map(
-                        lambda t: CHARGE_TYPE_LABELS.get(t, ("", t))[1]
-                    ),
-                    "Período": [
-                        period_label((mes, anio))
-                        for mes, anio in zip(historial_df["periodo_mes"], historial_df["periodo_anio"])
-                    ],
-                    "Movimientos": historial_df["cantidad_filas"],
-                    "Monto total": historial_df["monto_total"].fillna(0).map(_money),
-                })
-                st.dataframe(tabla, use_container_width=True, hide_index=True)
+            # ---------------------------------------------------------
+            # Detalle linea por linea de UNA liquidacion puntual. El
+            # combo de abajo referencia filas de historial_df por
+            # posicion (indice 0..N-1), no por un id propio -- alcanza
+            # porque se reconstruye en cada rerun a partir del mismo
+            # query, en el mismo orden.
+            # ---------------------------------------------------------
+            st.markdown(
+                '<div class="hwc-step" style="margin-top:1.4rem;">'
+                '<span class="hwc-step-num">🔎</span>Ver detalle de una liquidación</div>',
+                unsafe_allow_html=True,
+            )
 
-                # ---------------------------------------------------------
-                # Detalle linea por linea de UNA liquidacion puntual. El
-                # combo de abajo referencia filas de historial_df por
-                # posicion (indice 0..N-1), no por un id propio -- alcanza
-                # porque se reconstruye en cada rerun a partir del mismo
-                # query, en el mismo orden.
-                # ---------------------------------------------------------
-                st.markdown(
-                    '<div class="hwc-step" style="margin-top:1.4rem;">'
-                    '<span class="hwc-step-num">🔎</span>Ver detalle de una liquidación</div>',
-                    unsafe_allow_html=True,
+            def _etiqueta_detalle(i: int) -> str:
+                fila = historial_df.iloc[i]
+                tipo_label = CHARGE_TYPE_LABELS.get(fila["tipo_cargo"], ("", fila["tipo_cargo"]))[1]
+                periodo_txt = period_label((fila["periodo_mes"], fila["periodo_anio"]))
+                fecha_txt = fila["generado_en"].strftime("%d/%m/%Y %H:%M UTC")
+                vigencia_txt = "vigente" if fila["es_vigente"] else "anterior"
+                return (
+                    f"{fila['aerolinea'].upper()} · {fila['estacion']} · {tipo_label} · "
+                    f"{periodo_txt} · {fecha_txt} ({vigencia_txt})"
                 )
 
-                def _etiqueta_detalle(i: int) -> str:
-                    fila = historial_df.iloc[i]
-                    tipo_label = CHARGE_TYPE_LABELS.get(fila["tipo_cargo"], ("", fila["tipo_cargo"]))[1]
-                    periodo_txt = period_label((fila["periodo_mes"], fila["periodo_anio"]))
-                    fecha_txt = fila["generado_en"].strftime("%d/%m/%Y %H:%M UTC")
-                    vigencia_txt = "vigente" if fila["es_vigente"] else "anterior"
-                    return (
-                        f"{fila['aerolinea'].upper()} · {fila['estacion']} · {tipo_label} · "
-                        f"{periodo_txt} · {fecha_txt} ({vigencia_txt})"
+            seleccion = st.selectbox(
+                "Elegí una liquidación para ver su detalle línea por línea",
+                options=range(len(historial_df)),
+                format_func=_etiqueta_detalle,
+                label_visibility="collapsed",
+                key="hist_detalle_selector",
+            )
+            fila_sel = historial_df.iloc[seleccion]
+
+            if fila_sel["cantidad_filas"] == 0:
+                st.info("Esta liquidación no tiene movimientos asociados (sin movimiento).", icon="🔍")
+            else:
+                with st.spinner("Cargando detalle..."):
+                    resultado_detalle = _obtener_detalle_liquidacion(fila_sel)
+                if resultado_detalle is None:
+                    st.warning(
+                        "No se pudo cargar el detalle ahora mismo. Probá de nuevo en unos minutos.",
+                        icon="⚠️",
                     )
-
-                seleccion = st.selectbox(
-                    "Elegí una liquidación para ver su detalle línea por línea",
-                    options=range(len(historial_df)),
-                    format_func=_etiqueta_detalle,
-                    label_visibility="collapsed",
-                    key="hist_detalle_selector",
-                )
-                fila_sel = historial_df.iloc[seleccion]
-
-                if fila_sel["cantidad_filas"] == 0:
-                    st.info("Esta liquidación no tiene movimientos asociados (sin movimiento).", icon="🔍")
                 else:
-                    with st.spinner("Cargando detalle..."):
-                        resultado_detalle = _obtener_detalle_liquidacion(fila_sel)
-                    if resultado_detalle is None:
-                        st.warning(
-                            "No se pudo cargar el detalle ahora mismo. Probá de nuevo en unos minutos.",
-                            icon="⚠️",
+                    detalle_df, resumen = resultado_detalle
+
+                    if resumen is not None:
+                        # Resumen Facturacion (solo LATAM): mismo
+                        # desglose de IVA que trae la hoja real del
+                        # Excel -- sub-items de cada sub-factura,
+                        # TOTAL LA, IVA, TOTAL 4M y TOTAL PERIODO.
+                        # build_latam_resumen() es la MISMA funcion que
+                        # usa write_liquidacion() para el Excel real
+                        # (ver _write_resumen_sheet en
+                        # liquidacion_builder.py), no una
+                        # reimplementacion del calculo de IVA.
+                        la_rows = "".join(
+                            f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                            f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
+                            for col in LATAM_SUBFACTURA_LA
+                        )
+                        m4_rows = "".join(
+                            f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
+                            f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
+                            for col in LATAM_SUBFACTURA_4M
+                        )
+                        st.markdown(
+                            f'<div class="hwc-group-card">'
+                            f'<div class="hwc-group-title">🧾 Resumen Facturación</div>'
+                            f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);">LATAM AIRLINES</div>'
+                            f'{la_rows}'
+                            f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
+                            f'<b>TOTAL LA (sin IVA)</b><span class="hwc-count">{_money(resumen["total_la"])}</span></div>'
+                            f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);margin-top:0.6rem;">LAN ARGENTINA</div>'
+                            f'{m4_rows}'
+                            f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">%</span>'
+                            f'IVA (21%, informativo)<span class="hwc-count">{_money(resumen["iva"])}</span></div>'
+                            f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
+                            f'<b>TOTAL 4M (con IVA)</b><span class="hwc-count">{_money(resumen["total_4m"])}</span></div>'
+                            f'<div class="hwc-row hwc-row-active" style="margin-top:0.5rem;border-top:1px solid var(--hwc-border);padding-top:0.6rem;">'
+                            f'<span class="hwc-dot hwc-dot-active">✓</span><b>TOTAL PERIODO</b>'
+                            f'<span class="hwc-count">{_money(resumen["total_periodo"])}</span></div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(
+                            f"{len(detalle_df)} filas de detalle (hoja \"Detalle de Facturación\") — "
+                            "mismo filtrado y mismo cálculo de IVA que el Excel real de esta liquidación "
+                            "(liquidacion_builder.py), sin recalcular nada distinto."
                         )
                     else:
-                        detalle_df, resumen = resultado_detalle
+                        st.caption(
+                            f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
+                            "liquidación (report_builder.py), sin recalcular nada."
+                        )
 
-                        if resumen is not None:
-                            # Resumen Facturacion (solo LATAM): mismo
-                            # desglose de IVA que trae la hoja real del
-                            # Excel -- sub-items de cada sub-factura,
-                            # TOTAL LA, IVA, TOTAL 4M y TOTAL PERIODO.
-                            # build_latam_resumen() es la MISMA funcion que
-                            # usa write_liquidacion() para el Excel real
-                            # (ver _write_resumen_sheet en
-                            # liquidacion_builder.py), no una
-                            # reimplementacion del calculo de IVA.
-                            la_rows = "".join(
-                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
-                                f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
-                                for col in LATAM_SUBFACTURA_LA
-                            )
-                            m4_rows = "".join(
-                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">✓</span>'
-                                f'{col}<span class="hwc-count">{_money(resumen["sums"][col])}</span></div>'
-                                for col in LATAM_SUBFACTURA_4M
-                            )
-                            st.markdown(
-                                f'<div class="hwc-group-card">'
-                                f'<div class="hwc-group-title">🧾 Resumen Facturación</div>'
-                                f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);">LATAM AIRLINES</div>'
-                                f'{la_rows}'
-                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
-                                f'<b>TOTAL LA (sin IVA)</b><span class="hwc-count">{_money(resumen["total_la"])}</span></div>'
-                                f'<div class="hwc-row" style="font-weight:700;color:var(--hwc-blue-text);margin-top:0.6rem;">LAN ARGENTINA</div>'
-                                f'{m4_rows}'
-                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">%</span>'
-                                f'IVA (21%, informativo)<span class="hwc-count">{_money(resumen["iva"])}</span></div>'
-                                f'<div class="hwc-row hwc-row-active"><span class="hwc-dot hwc-dot-active">Σ</span>'
-                                f'<b>TOTAL 4M (con IVA)</b><span class="hwc-count">{_money(resumen["total_4m"])}</span></div>'
-                                f'<div class="hwc-row hwc-row-active" style="margin-top:0.5rem;border-top:1px solid var(--hwc-border);padding-top:0.6rem;">'
-                                f'<span class="hwc-dot hwc-dot-active">✓</span><b>TOTAL PERIODO</b>'
-                                f'<span class="hwc-count">{_money(resumen["total_periodo"])}</span></div>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-                            st.caption(
-                                f"{len(detalle_df)} filas de detalle (hoja \"Detalle de Facturación\") — "
-                                "mismo filtrado y mismo cálculo de IVA que el Excel real de esta liquidación "
-                                "(liquidacion_builder.py), sin recalcular nada distinto."
-                            )
-                        else:
-                            st.caption(
-                                f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
-                                "liquidación (report_builder.py), sin recalcular nada."
-                            )
-
-                        # Alto dinamico hasta un tope: con liquidaciones
-                        # chicas (ej. 3 filas) no deja un montón de grilla
-                        # vacia; con liquidaciones grandes (ej. 1033 filas)
-                        # se topea en 420px y scrollea adentro del recuadro
-                        # en vez de estirar la pagina entera.
-                        alto_tabla = min(420, 38 * (len(detalle_df) + 1) + 4)
-                        st.dataframe(detalle_df, use_container_width=True, hide_index=True, height=alto_tabla)
+                    # Alto dinamico hasta un tope: con liquidaciones
+                    # chicas (ej. 3 filas) no deja un montón de grilla
+                    # vacia; con liquidaciones grandes (ej. 1033 filas)
+                    # se topea en 420px y scrollea adentro del recuadro
+                    # en vez de estirar la pagina entera.
+                    alto_tabla = min(420, 38 * (len(detalle_df) + 1) + 4)
+                    st.dataframe(detalle_df, use_container_width=True, hide_index=True, height=alto_tabla)
 
 st.markdown('<div class="hwc-footer">Handyway Cargo · Automatización de reportes</div>', unsafe_allow_html=True)

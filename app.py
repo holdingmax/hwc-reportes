@@ -451,7 +451,7 @@ st.markdown(
 # ya usadas en el flujo de siempre -- el tab de Historial no lee ni escribe
 # nada de lo que pasa en el de Generar.
 # ---------------------------------------------------------------------------
-tab_generar, tab_historial = st.tabs(["📄 Generar reporte", "🕘 Historial"])
+tab_historial, tab_generar = st.tabs(["📊 Liquidaciones", "📄 Generar reporte"])
 
 # ---------------------------------------------------------------------------
 # Seccion 1: subir archivo
@@ -747,7 +747,7 @@ with tab_generar:
 # ---------------------------------------------------------------------------
 with tab_historial:
     with st.container(border=True, key="card_historial"):
-        st.markdown('<div class="hwc-step">🕘 Historial de liquidaciones</div>', unsafe_allow_html=True)
+        st.markdown('<div class="hwc-step">📊 Liquidaciones</div>', unsafe_allow_html=True)
         st.caption("Consulta de solo lectura sobre lo ya generado y guardado — no vuelve a calcular nada.")
 
         filtros = obtener_filtros_historial()

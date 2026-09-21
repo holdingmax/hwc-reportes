@@ -461,7 +461,7 @@ def _grafico_barras(serie: pd.Series, nombre_categoria: str, color: str, orden: 
     )
 
 
-def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | None:
+def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None, str | None] | None:
     """Detalle linea por linea de una liquidacion del Historial, mas el
     Resumen Facturacion (con desglose de IVA) cuando aplica a LATAM.
 
@@ -472,11 +472,14 @@ def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | Non
     funciones para que lo mostrado en pantalla coincida exactamente con
     lo que trae el Excel de esa combinacion.
 
-    Devuelve (detalle_df, resumen): resumen es el dict de
+    Devuelve (detalle_df, resumen, sheet_name): resumen es el dict de
     build_latam_resumen() para LATAM (con total_la/neto_gravado/iva/
     total_4m/total_periodo/sums, igual que la hoja "Resumen Facturación"
     del Excel real), o None para el resto (Avianca/Gol no tienen resumen
-    formal, son hojas simples).
+    formal, son hojas simples). sheet_name es el nombre de hoja real
+    (para reconstruir el Excel con write_report({sheet_name: detalle})) o
+    None para LATAM, que no lo necesita -- write_liquidacion() ya pone su
+    propio nombre de hoja internamente.
 
     None (no la tupla) si la base no responde o no se pudo reconstruir
     el detalle.
@@ -491,7 +494,7 @@ def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | Non
     if tipo_cargo == "latam_liquidacion":
         detalle = build_latam_detalle(movimientos, period=period)
         resumen = build_latam_resumen(detalle)
-        return detalle, resumen
+        return detalle, resumen, None
 
     charge_cfg = CHARGE_TYPES.get(tipo_cargo)
     if charge_cfg is None:
@@ -504,7 +507,7 @@ def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None] | Non
     detalle = sheets.get(sheet_name)
     if detalle is None:
         return None
-    return detalle, None
+    return detalle, None, sheet_name
 
 
 def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, str]]:
@@ -920,7 +923,7 @@ with st.container(border=True, key="card_historial"):
                         icon="⚠️",
                     )
                 else:
-                    detalle_df, resumen = resultado_detalle
+                    detalle_df, resumen, sheet_name = resultado_detalle
 
                     if resumen is not None:
                         # Resumen Facturacion (solo LATAM): mismo
@@ -971,6 +974,28 @@ with st.container(border=True, key="card_historial"):
                             f"{len(detalle_df)} filas — mismo filtrado que arma el Excel real de esta "
                             "liquidación (report_builder.py), sin recalcular nada."
                         )
+
+                    # Excel en memoria con las mismas funciones que arman el
+                    # Excel real (write_liquidacion / write_report) -- no
+                    # reimplementa el armado del archivo, solo lo reusa
+                    # sobre el mismo detalle ya reconstruido arriba.
+                    detalle_buffer = io.BytesIO()
+                    if resumen is not None:
+                        write_liquidacion(detalle_df, resumen, detalle_buffer)
+                    else:
+                        write_report({sheet_name: detalle_df}, detalle_buffer)
+                    detalle_buffer.seek(0)
+
+                    periodo_slug = period_slug((fila_sel["periodo_mes"], fila_sel["periodo_anio"]))
+                    st.caption("Descarga opcional — la liquidación ya quedó guardada.")
+                    st.download_button(
+                        label="⬇️ Descargar Excel",
+                        data=detalle_buffer,
+                        file_name=f"{fila_sel['aerolinea']}_{fila_sel['estacion']}_{periodo_slug}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="secondary",
+                        key="hist_detalle_download",
+                    )
 
                     # Alto dinamico hasta un tope: con liquidaciones
                     # chicas (ej. 3 filas) no deja un montón de grilla

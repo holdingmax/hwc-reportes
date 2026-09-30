@@ -1,5 +1,7 @@
 # Archivos del cliente (export original + reportes de referencia), no son codigo
 data/
+# Idem para los archivos reales que usan los tests de regresion
+tests/fixtures/
 
 # Reportes generados por el script/la app, no son codigo fuente
 output/

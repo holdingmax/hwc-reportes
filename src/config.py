@@ -66,6 +66,11 @@ EMPTY_SHEET_STYLE_HEADERS_ONLY = "headers_only"
 # mismo esquema -- ver liquidacion_builder.py.
 FLOW_SIMPLE_REPORT = "simple_report"
 FLOW_LIQUIDACION = "liquidacion"
+# JetSmart usa su propia liquidacion (ver jetsmart_builder.py): parte de otro
+# export (el del sistema de guias, no "archivo original.xlsx") y su
+# estructura (Ventas / Comisiones / GHA Services / Total a WCS) no tiene
+# nada en comun con las sub-facturas de LATAM.
+FLOW_JETSMART = "jetsmart_liquidacion"
 
 # Que tipos de cargo se facturan a cada aerolinea. Esto es una decision de
 # negocio, no algo que se pueda inferir de los datos: por ejemplo GOL tiene
@@ -128,6 +133,15 @@ AIRLINE_CONFIGS = {
         "flow": FLOW_LIQUIDACION,
         "unconfirmed_stations": LATAM_UNCONFIRMED_STATIONS,
     },
+    "jetsmart": {
+        # Valor de la columna "Empresa" del export de guias (ver
+        # COL_JS_EMPRESA mas abajo); se compara sin distinguir mayusculas.
+        "match": "JETSMART",
+        "flow": FLOW_JETSMART,
+        # Un unico tipo de cargo: el flete domestico ($ Prioridad), que es
+        # la base de Ventas Netas de la liquidacion. Ver JETSMART_* abajo.
+        "charge_type": "jetsmart_liquidacion",
+    },
 }
 
 EMPTY_STATION_TEXT = "Sin movimiento de awbs de importación destino {station}"
@@ -189,3 +203,55 @@ LATAM_DETALLE_CHARGE_COLUMNS = {
 LATAM_SUBFACTURA_LA = [COL_LATAM_COLLECT, COL_LATAM_ADUANA]
 LATAM_SUBFACTURA_4M = [COL_LATAM_DELIVERY_FEE, COL_LATAM_EXPEDICION]
 LATAM_IVA_RATE = 0.21
+
+# --- Liquidacion de JetSmart (ver jetsmart_builder.py) ---
+# Columnas del export mensual del sistema de guias de Handyway (NO es
+# "archivo original.xlsx": es otro reporte, con una fila por guia). Nombres
+# tal cual vienen en el export real de julio 2026 -- ojo con "Aero. Dstino"
+# y "$ Total." (asi, con el typo y el punto).
+COL_JS_CREACION = "Creacion"
+COL_JS_GUIA = "# Guía"
+COL_JS_CLIENTE = "Cliente"
+COL_JS_ORIGEN = "Aero. Origen"
+COL_JS_DESTINO = "Aero. Dstino"
+COL_JS_ESTADO = "Estado"
+COL_JS_KGS = "KGs"
+COL_JS_PRIORIDAD = "$ Prioridad"
+COL_JS_EMPRESA = "Empresa"
+
+# Estaciones de la tabla "Ex / Kg / Rate / TC / Pesos" de la hoja
+# LIQUIDACION, en el mismo orden que la liquidacion armada a mano
+# (LIQ_ECS_07-2026). Los Kg se agrupan por ESTACION DE ORIGEN de la guia.
+# Una estacion que aparezca en el export y no este aca se agrega al final
+# de la tabla (ver build_jetsmart_resumen): nunca se descartan kilos.
+JETSMART_STATIONS = ["AEP", "BRC", "COR", "CRD", "IGR", "MDZ", "NQN", "TUC", "SLA", "USH", "EZE"]
+
+# Tarifa GHA en USD por kg, por estacion. En julio 2026 fue 0,185 pareja en
+# todas, pero NO esta confirmado si es fija o varia por estacion/periodo
+# (pendiente con Anita). Mismo criterio que LATAM/Avianca para datos sin
+# confirmar: se calcula igual y la app muestra un aviso amarillo en vez de
+# bloquear. Una estacion sin entrada aca usa JETSMART_TARIFA_USD_KG_DEFAULT
+# y tambien queda marcada como no confirmada.
+JETSMART_TARIFA_USD_KG_DEFAULT = 0.185
+JETSMART_TARIFA_USD_KG_POR_ESTACION = {station: 0.185 for station in JETSMART_STATIONS}
+# Estaciones cuya tarifa YA esta confirmada. Vacia hasta que Anita lo
+# confirme; a medida que se confirme, sumar la estacion aca y el aviso deja
+# de mostrarse para ella.
+JETSMART_TARIFA_CONFIRMADA_STATIONS: list[str] = []
+
+# Porcentajes de la hoja LIQUIDACION, relevados de LIQ_ECS_07-2026 (formulas
+# de la planilla de Anita: B7 = -B6*0.075; IVA por guia = gravado*0.21).
+JETSMART_IVA_RATE = 0.21
+JETSMART_COMISION_DOMESTICA_RATE = 0.075
+# "IVA of Service And Comissions" e "IIBB Tax (Over cost)" estan en 0 fijo
+# en la liquidacion de julio 2026 (no es formula, es un 0 tipeado). Se
+# mantienen asi hasta que se confirme si alguna vez llevan valor.
+JETSMART_IVA_SERVICIOS = 0.0
+JETSMART_IIBB = 0.0
+
+# "Commissions for sales - Inter": USD fijo por vuelo internacional, por
+# estacion (sale de las hojas "MANI EZE" / "MANI MDZ" de la liquidacion a
+# mano: EZE 17,5 USD por vuelo, MDZ 35 USD por vuelo). La CANTIDAD de
+# vuelos sale de los manifiestos, que no vienen en ningun export: se carga a
+# mano al generar la liquidacion, igual que el tipo de cambio.
+JETSMART_COMISION_INTER_USD_POR_VUELO = {"EZE": 17.5, "MDZ": 35.0}

@@ -4,11 +4,19 @@ Uso:
     python -m src.main --airline avianca
     python -m src.main --airline gol --input "data/archivo original.xlsx" --output "output/gol.xlsx"
     python -m src.main --airline latam
+    python -m src.main --airline jetsmart --input export_guias.xlsx --tc 1485 --vuelos EZE=56 MDZ=38
 """
 
 import argparse
 
-from src.config import AIRLINE_CONFIGS, FLOW_LIQUIDACION
+from src.config import AIRLINE_CONFIGS, FLOW_JETSMART, FLOW_LIQUIDACION
+from src.jetsmart_builder import (
+    build_jetsmart_guias,
+    build_jetsmart_resumen,
+    detect_jetsmart_period,
+    load_jetsmart_export,
+    write_jetsmart_liquidacion,
+)
 from src.liquidacion_builder import build_latam_detalle, build_latam_resumen, write_liquidacion
 from src.loader import load_original
 from src.report_builder import build_airline_report, write_report
@@ -19,9 +27,27 @@ def main() -> None:
     parser.add_argument("--airline", required=True, choices=sorted(AIRLINE_CONFIGS), help="Aerolinea para la que se arma el reporte.")
     parser.add_argument("--input", default="data/archivo original.xlsx", help="Ruta al export del sistema (archivo original).")
     parser.add_argument("--output", default=None, help="Ruta del reporte a generar. Por defecto: output/<airline>.xlsx")
+    parser.add_argument("--tc", type=float, default=None, help="Solo JetSmart: tipo de cambio del periodo (dato manual).")
+    parser.add_argument("--vuelos", nargs="*", default=[], metavar="ESTACION=N", help="Solo JetSmart: vuelos internacionales por estacion, ej. EZE=56 MDZ=38.")
     args = parser.parse_args()
 
     output_path = args.output or f"output/{args.airline}.xlsx"
+
+    if AIRLINE_CONFIGS[args.airline].get("flow") == FLOW_JETSMART:
+        if args.tc is None:
+            parser.error("--tc es obligatorio para jetsmart")
+        vuelos_inter = {k.upper(): int(v) for k, v in (item.split("=", 1) for item in args.vuelos)}
+        export = load_jetsmart_export(args.input)
+        period, _ = detect_jetsmart_period(export)
+        guias = build_jetsmart_guias(export)
+        resumen = build_jetsmart_resumen(guias, args.tc, vuelos_inter)
+        write_jetsmart_liquidacion(guias, resumen, period, output_path)
+
+        print(f"Liquidación generada en: {output_path}")
+        print(f"  - GUIAS: {len(guias)} filas")
+        print(f"  - Ventas Netas: {resumen['ventas_netas']:,.2f}")
+        print(f"  - Total a entregar a WCS: {resumen['total_wcs']:,.2f}")
+        return
     df = load_original(args.input)
 
     if AIRLINE_CONFIGS[args.airline].get("flow") == FLOW_LIQUIDACION:

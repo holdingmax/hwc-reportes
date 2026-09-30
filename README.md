@@ -19,7 +19,7 @@ Parámetros opcionales:
 python -m src.main --airline gol --input "data/archivo original.xlsx" --output "output/gol.xlsx"
 ```
 
-- `--airline`: obligatorio. Aerolíneas disponibles hoy: `avianca`, `gol`.
+- `--airline`: obligatorio. Aerolíneas disponibles hoy: `avianca`, `gol`, `latam`, `jetsmart`.
 - `--input`: ruta al export del sistema (default: `data/archivo original.xlsx`).
 - `--output`: ruta del archivo a generar (default: `output/<airline>.xlsx`).
 
@@ -71,8 +71,43 @@ python -m src.main --airline gol --input "data/archivo original.xlsx" --output "
   ningún split ni conversión (por ejemplo, no se hace el split USD/ARS que
   el reporte manual de Avianca tiene en su hoja "Delivery Fee EZE").
 
+## JetSmart
+
+JetSmart tiene su propio flujo (`src/jetsmart_builder.py`), porque no parte de
+`archivo original.xlsx` sino del export del sistema de guías filtrado por
+Empresa (`# Guía`, `KGs`, `$ Prioridad`, …), y su liquidación no se parece a la
+de LATAM. Genera las hojas GUIAS, LIQUIDACION, CVLP y COMISIONES INTER:
+
+- **Ventas Netas**: suma de `$ Prioridad`. Ventas totales = netas + IVA 21%.
+- **Comisión doméstica**: 7,5% de Ventas Netas.
+- **Comisión internacional**: vuelos × USD por vuelo (EZE 17,5, MDZ 35) × TC.
+- **GHA Services**: Kg por estación de origen × tarifa USD/kg × TC.
+- **IVA de servicios e IIBB**: 0, igual que en la planilla de julio 2026.
+
+```
+python -m src.main --airline jetsmart --input export_guias.xlsx --tc 1485 --vuelos EZE=56 MDZ=38
+```
+
+Datos manuales: el **tipo de cambio** y la **cantidad de vuelos
+internacionales** (salen de los manifiestos) no vienen en ningún export. Se
+cargan al generar la liquidación, en la app o por CLI.
+
+Fuera de alcance: el cruce contra el archivo de Ariel (JetSmart) y la
+validación contra AFIP. Por eso la liquidación toma todas las guías del export
+tal cual vienen, y la app lo avisa. En julio 2026 eso da +$525.640 de Ventas
+Netas contra la liquidación armada a mano (36 guías del export que el cruce
+dejó afuera y 24 que agregó).
+
+Regresión: `python -m unittest tests.test_jetsmart_regresion -v`. Necesita los
+archivos reales en `tests/fixtures/jetsmart/`, que no se versionan. Compara
+celda por celda las hojas LIQUIDACION y CVLP contra `LIQ_ECS_07-2026_00000005.xlsx`.
+
 ## Pendiente de confirmar con el cliente
 
+- **Tarifa GHA de JetSmart**: 0,185 USD/kg en todas las estaciones (julio
+  2026), sin confirmar si es fija o varía por estación/período. Se aplica
+  igual y la app muestra un aviso amarillo (`JETSMART_TARIFA_CONFIRMADA_STATIONS`
+  en `src/config.py`). El origen del tipo de cambio también está sin confirmar.
 - **Tarifas e IVA**: toda la lógica de cálculo de tarifas (incluyendo el
   split USD/ARS de Delivery Fee) y de IVA queda para una segunda etapa,
   porque depende de una tabla de tarifas que todavía no está confirmada.

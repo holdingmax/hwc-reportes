@@ -41,13 +41,17 @@ from src.config import (
     AIRLINE_CONFIGS,
     CHARGE_TYPES,
     COL_COD_VUELO,
+    FLOW_JETSMART,
     FLOW_LIQUIDACION,
+    JETSMART_COMISION_INTER_USD_POR_VUELO,
     LATAM_SUBFACTURA_4M,
     LATAM_SUBFACTURA_LA,
 )
 from src.db import (
+    guardar_liquidacion_jetsmart,
     guardar_liquidacion_latam,
     guardar_reporte_simple,
+    obtener_detalle_totales,
     obtener_filtros_historial,
     obtener_historial,
     obtener_movimientos_de_carga,
@@ -58,6 +62,14 @@ from src.liquidacion_builder import (
     detect_latam_period_exclusions,
     detect_unconfirmed_station_activity,
     write_liquidacion,
+)
+from src.jetsmart_builder import (
+    build_jetsmart_guias,
+    build_jetsmart_resumen,
+    detect_jetsmart_period,
+    load_jetsmart_export,
+    unconfirmed_tarifa_activity,
+    write_jetsmart_liquidacion,
 )
 from src.loader import load_original
 from src.period_utils import extract_period, period_label, period_slug
@@ -73,6 +85,7 @@ CHARGE_TYPE_LABELS = {
     "trans_electronica": ("📡", "Transmisión Electrónica"),
     "collect": ("💰", "Collect"),
     "latam_liquidacion": ("🧾", "Liquidación LATAM"),
+    "jetsmart_liquidacion": ("🧾", "Liquidación JetSmart"),
 }
 
 LOGO_PATH = os.path.join("static", "images", "handyway-logo.png")
@@ -484,12 +497,25 @@ def _obtener_detalle_liquidacion(fila) -> tuple[pd.DataFrame, dict | None, str |
     None (no la tupla) si la base no responde o no se pudo reconstruir
     el detalle.
     """
+    period = (fila["periodo_mes"], fila["periodo_anio"])
+    tipo_cargo = fila["tipo_cargo"]
+
+    if tipo_cargo == "jetsmart_liquidacion":
+        # JetSmart no guarda movimientos_awb (ver guardar_liquidacion_jetsmart):
+        # las guias y los datos manuales (TC, vuelos) viven en
+        # detalle_totales, y el resumen se recalcula con la MISMA funcion
+        # que arma el Excel real.
+        detalle_totales = obtener_detalle_totales(int(fila["id"]))
+        if not detalle_totales:
+            return None
+        guias = pd.DataFrame(detalle_totales["guias"])
+        parametros = detalle_totales["parametros"]
+        resumen = build_jetsmart_resumen(guias, parametros["tipo_cambio"], parametros["vuelos_inter"])
+        return guias, resumen, None
+
     movimientos = obtener_movimientos_de_carga(int(fila["carga_id"]))
     if movimientos is None:
         return None
-
-    period = (fila["periodo_mes"], fila["periodo_anio"])
-    tipo_cargo = fila["tipo_cargo"]
 
     if tipo_cargo == "latam_liquidacion":
         detalle = build_latam_detalle(movimientos, period=period)
@@ -595,6 +621,102 @@ def _render_liquidacion_result(uploaded_file) -> tuple[object, dict, tuple[str, 
 
     return buffer, resumen, period
 
+def _jetsmart_resumen_html(resumen: dict) -> str:
+    """Card con la hoja LIQUIDACION (y el total de CVLP) de JetSmart."""
+    def row(label, value, *, bold=False, dot="✓", style=""):
+        label_html = f"<b>{label}</b>" if bold else label
+        return (
+            f'<div class="hwc-row hwc-row-active"{style}><span class="hwc-dot hwc-dot-active">{dot}</span>'
+            f'{label_html}<span class="hwc-count">{_money(value)}</span></div>'
+        )
+
+    separador = ' style="margin-top:0.5rem;border-top:1px solid var(--hwc-border);padding-top:0.6rem;"'
+    return (
+        '<div class="hwc-group-card">'
+        '<div class="hwc-group-title">🧾 Liquidación JetSmart</div>'
+        + row("Ventas totales", resumen["ventas_totales"])
+        + row("IVA", resumen["iva"], dot="%")
+        + row("Ventas Netas", resumen["ventas_netas"], bold=True, dot="Σ")
+        + row("Comisiones por ventas — domésticas (7,5%)", resumen["comision_domestica"])
+        + row("Comisiones por ventas — internacionales", resumen["comision_inter"])
+        + row(f"GHA Services ({resumen['kg_total']:,.2f} kg)", resumen["gha_services"])
+        + row("IVA de servicios y comisiones", resumen["iva_servicios"])
+        + row("IIBB", resumen["iibb"])
+        + row("Total a entregar a WCS", resumen["total_wcs"], bold=True, style=separador)
+        + row("CVLP — Total final (con IVA 21% s/ neto gravado)", resumen["cvlp"]["total_final"])
+        + "</div>"
+    )
+
+
+def _jetsmart_avisos(resumen: dict, filas_otros_meses: int, period: tuple[str, str]) -> None:
+    """Avisos amarillos de JetSmart: nunca bloquean el calculo."""
+    activity = unconfirmed_tarifa_activity(resumen)
+    if activity:
+        # Agrupado por tarifa: hoy es una sola (0,185 en todas), no hace
+        # falta repetirla estacion por estacion.
+        por_tarifa: dict[float, list[str]] = {}
+        for e in resumen["estaciones"]:
+            if e["estacion"] in activity:
+                por_tarifa.setdefault(e["tarifa_usd_kg"], []).append(e["estacion"])
+        detalle_txt = "; ".join(
+            f"{str(tarifa).replace('.', ',')} USD/kg en {', '.join(estaciones)}"
+            for tarifa, estaciones in por_tarifa.items()
+        )
+        st.warning(
+            f"Tarifa no confirmada: la tarifa GHA de JetSmart todavía no está confirmada con el cliente "
+            f"(se aplicó {detalle_txt}). Revisá GHA Services antes de usar estos montos.",
+            icon="⚠️",
+        )
+    st.warning(
+        "Sin cruce con el archivo de JetSmart (Ariel): esta liquidación toma todas las guías del export "
+        "tal cual vienen. Las guías que el cruce difiere al mes siguiente (voló después del cierre) o agrega "
+        "no se ajustan, así que los totales pueden diferir de la liquidación final.",
+        icon="⚠️",
+    )
+    if filas_otros_meses:
+        guia_word = "guía creada" if filas_otros_meses == 1 else "guías creadas"
+        st.caption(
+            f"ℹ️ Incluye {filas_otros_meses} {guia_word} fuera de {period_label(period)} "
+            "(se liquidan por mes de vuelo, no de creación; el export no trae la fecha de vuelo)."
+        )
+
+
+def _render_jetsmart_result(uploaded_file, tipo_cambio: float, vuelos_inter: dict[str, int]) -> tuple[object, tuple[str, str]]:
+    """Corre el flujo de liquidacion de JetSmart y muestra su resumen."""
+    with st.spinner("Generando liquidación..."):
+        export = load_jetsmart_export(uploaded_file)
+        period, otros_meses = detect_jetsmart_period(export)
+        guias = build_jetsmart_guias(export)
+        resumen = build_jetsmart_resumen(guias, tipo_cambio, vuelos_inter)
+
+        buffer = io.BytesIO()
+        write_jetsmart_liquidacion(guias, resumen, period, buffer)
+        buffer.seek(0)
+
+        guardar_liquidacion_jetsmart(
+            nombre_archivo=uploaded_file.name,
+            file_bytes=uploaded_file.getvalue(),
+            period=period,
+            filas_export=len(export),
+            filas_otros_meses=len(otros_meses),
+            guias=guias,
+            resumen=resumen,
+            parametros={"tipo_cambio": tipo_cambio, "vuelos_inter": vuelos_inter},
+        )
+
+    st.success("Liquidación generada correctamente.", icon="✅")
+    st.success("Cargado — ya está disponible abajo, en Liquidaciones.", icon="✅")
+    st.session_state["_reabrir_carga"] = True
+    vuelos_txt = ", ".join(f"{station} {n}" for station, n in vuelos_inter.items())
+    st.caption(
+        f"Período detectado: {period_label(period)} · {len(guias)} guías · "
+        f"TC {tipo_cambio:,.2f} y vuelos internacionales ({vuelos_txt}) cargados a mano."
+    )
+    _jetsmart_avisos(resumen, len(otros_meses), period)
+    st.markdown(_jetsmart_resumen_html(resumen), unsafe_allow_html=True)
+    return buffer, period
+
+
 # ---------------------------------------------------------------------------
 # Titulo principal (jerarquia por encima del banner de marca, sin tocarlo)
 # ---------------------------------------------------------------------------
@@ -638,7 +760,27 @@ with st.expander("+ Cargar archivo nuevo", expanded=False, key="expander_carga")
     with st.container(border=True, key="card_config"):
         st.markdown('<div class="hwc-step"><span class="hwc-step-num">2</span>✈️ Elegí la aerolínea</div>', unsafe_allow_html=True)
         airline_key = st.selectbox("Aerolínea", options=sorted(AIRLINE_CONFIGS), format_func=str.upper, label_visibility="collapsed")
-        generate = st.button("Procesar y guardar", disabled=uploaded_file is None, type="primary")
+
+        # JetSmart necesita datos que no vienen en ningun export: el tipo
+        # de cambio del periodo (todavia sin confirmar de donde sale -- por
+        # ahora manual) y la cantidad de vuelos internacionales por estacion
+        # de los manifiestos. Sin TC no se puede calcular GHA Services.
+        faltan_datos = False
+        if AIRLINE_CONFIGS[airline_key].get("flow") == FLOW_JETSMART:
+            st.caption("JetSmart usa el export del sistema de guías (# Guía, KGs, $ Prioridad…), no el archivo original.")
+            tipo_cambio = st.number_input("Tipo de cambio del período (ARS por USD)", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+            vuelos_cols = st.columns(len(JETSMART_COMISION_INTER_USD_POR_VUELO))
+            vuelos_inter = {}
+            for col, (station, usd) in zip(vuelos_cols, JETSMART_COMISION_INTER_USD_POR_VUELO.items()):
+                with col:
+                    vuelos_inter[station] = int(st.number_input(
+                        f"Vuelos internacionales {station} ({usd:g} USD c/u)", min_value=0, value=0, step=1,
+                    ))
+            faltan_datos = tipo_cambio <= 0
+            if faltan_datos:
+                st.caption("Cargá el tipo de cambio para poder procesar.")
+
+        generate = st.button("Procesar y guardar", disabled=uploaded_file is None or faltan_datos, type="primary")
 
     # -----------------------------------------------------------------------
     # Seccion 3: resultado (mismo expander -- no hace falta salir de "+
@@ -650,7 +792,9 @@ with st.expander("+ Cargar archivo nuevo", expanded=False, key="expander_carga")
 
             airline_cfg = AIRLINE_CONFIGS[airline_key]
 
-            if airline_cfg.get("flow") == FLOW_LIQUIDACION:
+            if airline_cfg.get("flow") == FLOW_JETSMART:
+                buffer, period = _render_jetsmart_result(uploaded_file, tipo_cambio, vuelos_inter)
+            elif airline_cfg.get("flow") == FLOW_LIQUIDACION:
                 buffer, _, period = _render_liquidacion_result(uploaded_file)
             else:
                 with st.spinner("Generando reporte..."):
@@ -924,8 +1068,15 @@ with st.container(border=True, key="card_historial"):
                     )
                 else:
                     detalle_df, resumen, sheet_name = resultado_detalle
+                    es_jetsmart = fila_sel["tipo_cargo"] == "jetsmart_liquidacion"
 
-                    if resumen is not None:
+                    if es_jetsmart:
+                        st.markdown(_jetsmart_resumen_html(resumen), unsafe_allow_html=True)
+                        st.caption(
+                            f"{len(detalle_df)} guías (hoja \"GUIAS\") — TC {resumen['tipo_cambio']:,.2f}. "
+                            "Mismo cálculo que el Excel real de esta liquidación (jetsmart_builder.py)."
+                        )
+                    elif resumen is not None:
                         # Resumen Facturacion (solo LATAM): mismo
                         # desglose de IVA que trae la hoja real del
                         # Excel -- sub-items de cada sub-factura,
@@ -980,7 +1131,11 @@ with st.container(border=True, key="card_historial"):
                     # reimplementa el armado del archivo, solo lo reusa
                     # sobre el mismo detalle ya reconstruido arriba.
                     detalle_buffer = io.BytesIO()
-                    if resumen is not None:
+                    if es_jetsmart:
+                        write_jetsmart_liquidacion(
+                            detalle_df, resumen, (fila_sel["periodo_mes"], fila_sel["periodo_anio"]), detalle_buffer,
+                        )
+                    elif resumen is not None:
                         write_liquidacion(detalle_df, resumen, detalle_buffer)
                     else:
                         write_report({sheet_name: detalle_df}, detalle_buffer)

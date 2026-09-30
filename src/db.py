@@ -6,8 +6,8 @@ period_utils.py mas alla de leer AIRLINE_CONFIGS/CHARGE_TYPES/COL_* de
 config.py (que son datos de configuracion, no calculo) para no duplicar
 el mapeo de nombre-de-hoja -> tipo de cargo/estacion.
 
-Las dos funciones publicas (guardar_reporte_simple, guardar_liquidacion_latam)
-NUNCA lanzan excepciones: si DATABASE_URL no esta configurada, o la base no
+Las funciones publicas de guardado (guardar_reporte_simple,
+guardar_liquidacion_latam, guardar_liquidacion_jetsmart) NUNCA lanzan excepciones: si DATABASE_URL no esta configurada, o la base no
 responde, no hacen nada. La app tiene que poder seguir generando y
 descargando el Excel exactamente igual aunque la base este caida -- la
 persistencia es un efecto secundario, no un requisito del flujo de Cristian.
@@ -313,6 +313,85 @@ def guardar_liquidacion_latam(
         _get_connection.clear()
 
 
+def guardar_liquidacion_jetsmart(
+    nombre_archivo: str,
+    file_bytes: bytes,
+    period: Period,
+    filas_export: int,
+    filas_otros_meses: int,
+    guias: pd.DataFrame,
+    resumen: dict,
+    parametros: dict,
+) -> None:
+    """Persiste la carga del export de JetSmart mas una liquidacion
+    'jetsmart_liquidacion' (estacion "AR": es una liquidacion nacional).
+
+    A diferencia de Avianca/Gol/LATAM, NO escribe movimientos_awb: el
+    export de JetSmart tiene otras columnas (KGs, $ Prioridad, sin
+    Cod.Vuelo) que no entran en esa tabla sin una migracion. En su lugar,
+    detalle_totales guarda el resumen, los datos manuales usados (TC,
+    vuelos) y las guias, que es todo lo que hace falta para reconstruir el
+    detalle y el Excel desde Liquidaciones (ver obtener_detalle_totales).
+
+    monto_total = "Total collections to be delivered to WCS".
+
+    No lanza excepciones, igual que el resto de las funciones de guardado.
+    """
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return
+        archivo_hash = hashlib.sha256(file_bytes).hexdigest()
+        periodo_mes, periodo_anio = period
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM cargas_archivo WHERE archivo_hash = %s", (archivo_hash,))
+                existente = cur.fetchone()
+                if existente:
+                    carga_id = existente[0]
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO cargas_archivo
+                            (nombre_archivo, archivo_hash, periodo_mes, periodo_anio, periodo,
+                             filas_totales, filas_excluidas_periodo)
+                        VALUES (%s, %s, %s, %s, %s, %s, 0)
+                        RETURNING id
+                        """,
+                        (nombre_archivo, archivo_hash, periodo_mes, periodo_anio,
+                         _period_to_date(period), filas_export),
+                    )
+                    carga_id = cur.fetchone()[0]
+            detalle_totales = {
+                "resumen": resumen,
+                "parametros": parametros,
+                "filas_otros_meses": filas_otros_meses,
+                "guias": guias.astype(object).where(guias.notna(), None).to_dict(orient="records"),
+            }
+            _guardar_liquidacion(
+                conn, carga_id, "jetsmart", "AR", "jetsmart_liquidacion",
+                period, len(guias), resumen.get("total_wcs"), detalle_totales,
+            )
+    except Exception:
+        _get_connection.clear()
+
+
+def obtener_detalle_totales(liquidacion_id: int) -> dict | None:
+    """detalle_totales (JSONB) de una liquidacion puntual. Solo lectura,
+    mismo criterio fail-soft que el resto de este modulo."""
+    try:
+        conn = _get_connection()
+        if conn is None:
+            return None
+        with conn.cursor() as cur:
+            cur.execute("SELECT detalle_totales FROM liquidaciones WHERE id = %s", (liquidacion_id,))
+            fila = cur.fetchone()
+        return fila[0] if fila else None
+    except Exception:
+        _get_connection.clear()
+        return None
+
+
 def obtener_filtros_historial() -> dict | None:
     """Aerolineas/estaciones/periodos distintos que aparecen en liquidaciones,
     para poblar los selectores de la pantalla de Historial.
@@ -369,7 +448,7 @@ def obtener_historial(
         # y comparacion) y psycopg tira AmbiguousParameter -- probado en el
         # navegador real, no es una precaucion teorica.
         query = """
-            SELECT carga_id, generado_en, aerolinea, estacion, tipo_cargo,
+            SELECT id, carga_id, generado_en, aerolinea, estacion, tipo_cargo,
                    periodo_mes, periodo_anio, periodo, cantidad_filas, monto_total,
                    (ROW_NUMBER() OVER (
                        PARTITION BY aerolinea, estacion, tipo_cargo, periodo

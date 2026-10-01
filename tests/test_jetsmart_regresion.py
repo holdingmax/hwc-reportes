@@ -145,10 +145,13 @@ class TestCalculoCeldaPorCelda(unittest.TestCase):
         self.assertEqual(unconfirmed_tarifa_activity(self.resumen), {})
 
     def test_tarifa_no_confirmada_se_avisa_sin_bloquear(self):
-        # CRD no esta confirmada: si tiene kilos, se calcula igual y se avisa.
-        export = _guias_conciliadas_como_export().head(1).assign(**{COL_JS_ORIGEN: "CRD"})
+        # Una estacion que no esta en config (todas las conocidas estan
+        # confirmadas): si tiene kilos, se calcula igual con la tarifa
+        # default y se avisa.
+        export = _guias_conciliadas_como_export().head(1).assign(**{COL_JS_ORIGEN: "XYZ"})
         resumen = build_jetsmart_resumen(build_jetsmart_guias(export), TC_JULIO_2026, VUELOS_JULIO_2026)
-        self.assertEqual(set(unconfirmed_tarifa_activity(resumen)), {"CRD"})
+        self.assertEqual(set(unconfirmed_tarifa_activity(resumen)), {"XYZ"})
+        self.assertEqual(resumen["estaciones"][-1]["estacion"], "XYZ")
         self.assertLess(resumen["gha_services"], 0)
 
 

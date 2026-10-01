@@ -231,11 +231,12 @@ JETSMART_STATIONS = ["AEP", "BRC", "COR", "CRD", "IGR", "MDZ", "NQN", "TUC", "SL
 # contrato. Una estacion sin entrada aca usa JETSMART_TARIFA_USD_KG_DEFAULT.
 JETSMART_TARIFA_USD_KG_DEFAULT = 0.185
 JETSMART_TARIFA_USD_KG_POR_ESTACION = {station: 0.185 for station in JETSMART_STATIONS}
-# Estaciones cuya tarifa esta confirmada: para las que no esten aca, la app
-# calcula igual pero muestra el aviso amarillo de "tarifa no confirmada" si
-# la estacion tiene kilos en el periodo. CRD, IGR y USH no estan en la lista
-# que confirmo Anita (en julio 2026 no tuvieron kilos).
-JETSMART_TARIFA_CONFIRMADA_STATIONS = ["AEP", "BRC", "COR", "MDZ", "NQN", "TUC", "SLA", "EZE"]
+# Estaciones cuya tarifa esta confirmada: todas las de JETSMART_STATIONS (la
+# tarifa fija es del contrato de JetSmart en general, no por estacion). Una
+# estacion nueva que aparezca en el export y no este en esa lista se calcula
+# igual con el default, pero muestra el aviso amarillo de "tarifa no
+# confirmada" hasta que se la sume aca.
+JETSMART_TARIFA_CONFIRMADA_STATIONS = ["AEP", "BRC", "COR", "CRD", "IGR", "MDZ", "NQN", "TUC", "SLA", "USH", "EZE"]
 
 # Porcentajes de la hoja LIQUIDACION, relevados de LIQ_ECS_07-2026 (formulas
 # de la planilla de Anita: B7 = -B6*0.075; IVA por guia = gravado*0.21).

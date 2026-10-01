@@ -139,10 +139,17 @@ class TestCalculoCeldaPorCelda(unittest.TestCase):
         self.assertAlmostEqual(self.resumen["total_wcs"], ref["B13"].value, places=4)
         self.assertAlmostEqual(self.resumen["cvlp"]["total_final"], _sheet(self.referencia, "CVLP")["C23"].value, places=4)
 
+    def test_tarifa_confirmada_sin_aviso_en_julio(self):
+        # Todas las estaciones con kilos en julio 2026 tienen la tarifa
+        # confirmada (ver JETSMART_TARIFA_CONFIRMADA_STATIONS).
+        self.assertEqual(unconfirmed_tarifa_activity(self.resumen), {})
+
     def test_tarifa_no_confirmada_se_avisa_sin_bloquear(self):
-        activity = unconfirmed_tarifa_activity(self.resumen)
-        self.assertEqual(set(activity), {"AEP", "BRC", "COR", "MDZ", "NQN", "TUC", "SLA", "EZE"})
-        self.assertLess(self.resumen["gha_services"], 0)
+        # CRD no esta confirmada: si tiene kilos, se calcula igual y se avisa.
+        export = _guias_conciliadas_como_export().head(1).assign(**{COL_JS_ORIGEN: "CRD"})
+        resumen = build_jetsmart_resumen(build_jetsmart_guias(export), TC_JULIO_2026, VUELOS_JULIO_2026)
+        self.assertEqual(set(unconfirmed_tarifa_activity(resumen)), {"CRD"})
+        self.assertLess(resumen["gha_services"], 0)
 
 
 @unittest.skipUnless(LIQ_FINAL.exists() and EXPORT.exists(), "faltan los archivos de tests/fixtures/jetsmart/")

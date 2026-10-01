@@ -104,10 +104,10 @@ celda por celda las hojas LIQUIDACION y CVLP contra `LIQ_ECS_07-2026_00000005.xl
 
 ## Pendiente de confirmar con el cliente
 
-- **Tarifa GHA de JetSmart**: 0,185 USD/kg en todas las estaciones (julio
-  2026), sin confirmar si es fija o varía por estación/período. Se aplica
-  igual y la app muestra un aviso amarillo (`JETSMART_TARIFA_CONFIRMADA_STATIONS`
-  en `src/config.py`). El origen del tipo de cambio también está sin confirmar.
+- **Tipo de cambio de JetSmart**: sin confirmar de dónde sale; por ahora se
+  carga a mano. (La tarifa GHA de 0,185 USD/kg quedó confirmada como fija por
+  Anita el 1/10/2026 para AEP, BRC, COR, MDZ, NQN, TUC, SLA y EZE; ver
+  `JETSMART_TARIFA_CONFIRMADA_STATIONS` en `src/config.py`.)
 - **Tarifas e IVA**: toda la lógica de cálculo de tarifas (incluyendo el
   split USD/ARS de Delivery Fee) y de IVA queda para una segunda etapa,
   porque depende de una tabla de tarifas que todavía no está confirmada.

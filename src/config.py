@@ -226,18 +226,16 @@ COL_JS_EMPRESA = "Empresa"
 # de la tabla (ver build_jetsmart_resumen): nunca se descartan kilos.
 JETSMART_STATIONS = ["AEP", "BRC", "COR", "CRD", "IGR", "MDZ", "NQN", "TUC", "SLA", "USH", "EZE"]
 
-# Tarifa GHA en USD por kg, por estacion. En julio 2026 fue 0,185 pareja en
-# todas, pero NO esta confirmado si es fija o varia por estacion/periodo
-# (pendiente con Anita). Mismo criterio que LATAM/Avianca para datos sin
-# confirmar: se calcula igual y la app muestra un aviso amarillo en vez de
-# bloquear. Una estacion sin entrada aca usa JETSMART_TARIFA_USD_KG_DEFAULT
-# y tambien queda marcada como no confirmada.
+# Tarifa GHA en USD por kg, por estacion. Confirmado por Anita (1/10/2026):
+# 0,185 USD/kg fija en todas las estaciones, solo cambia si cambia el
+# contrato. Una estacion sin entrada aca usa JETSMART_TARIFA_USD_KG_DEFAULT.
 JETSMART_TARIFA_USD_KG_DEFAULT = 0.185
 JETSMART_TARIFA_USD_KG_POR_ESTACION = {station: 0.185 for station in JETSMART_STATIONS}
-# Estaciones cuya tarifa YA esta confirmada. Vacia hasta que Anita lo
-# confirme; a medida que se confirme, sumar la estacion aca y el aviso deja
-# de mostrarse para ella.
-JETSMART_TARIFA_CONFIRMADA_STATIONS: list[str] = []
+# Estaciones cuya tarifa esta confirmada: para las que no esten aca, la app
+# calcula igual pero muestra el aviso amarillo de "tarifa no confirmada" si
+# la estacion tiene kilos en el periodo. CRD, IGR y USH no estan en la lista
+# que confirmo Anita (en julio 2026 no tuvieron kilos).
+JETSMART_TARIFA_CONFIRMADA_STATIONS = ["AEP", "BRC", "COR", "MDZ", "NQN", "TUC", "SLA", "EZE"]
 
 # Porcentajes de la hoja LIQUIDACION, relevados de LIQ_ECS_07-2026 (formulas
 # de la planilla de Anita: B7 = -B6*0.075; IVA por guia = gravado*0.21).
